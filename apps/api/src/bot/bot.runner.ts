@@ -7,7 +7,11 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { loadConfig } from '@paedavic/config';
-import { NotificationService, SourceService } from '@paedavic/core';
+import {
+  GroupService,
+  NotificationService,
+  SourceService,
+} from '@paedavic/core';
 import { type Context, TelegramService } from '@paedavic/telegram';
 
 /**
@@ -24,6 +28,7 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly telegram: TelegramService,
     private readonly sources: SourceService,
     private readonly notifications: NotificationService,
+    private readonly groups: GroupService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -69,6 +74,22 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       }
       const lines = items.map((n, i) => `${i + 1}. ${n.name}`).join('\n');
       await ctx.reply(`📝 Notifications (${items.length}):\n${lines}`);
+    });
+
+    // /groups — list the workspace's segments + sizes (shared GroupService).
+    bot.command('groups', async (ctx) => {
+      const principal = ctx.from
+        ? await this.sources.resolveByTelegramId(BigInt(ctx.from.id))
+        : null;
+      if (!principal) {
+        await ctx.reply('Open your workspace start link first to connect.');
+        return;
+      }
+      const groups = await this.groups.list(principal.sourceId);
+      const lines = groups
+        .map((g) => `• ${g.name}${g.isAll ? ' (all)' : ''} — ${g.memberCount}`)
+        .join('\n');
+      await ctx.reply(`👥 Groups:\n${lines}`);
     });
 
     bot.catch((err) => {

@@ -54,9 +54,70 @@ model Source {
   updatedAt DateTime @updatedAt
 
   notifications Notification[]
+  subscribers   Subscriber[]
+  groups        Group[]
 
   @@index([ownerId])
   @@map("sources")
+}
+
+enum SubscriberStatus {
+  active
+  unsubscribed
+}
+
+/// An end user who receives notifications from a Source. Identity is the
+/// (sourceId, telegramUserId) pair — the same Telegram user is a distinct
+/// Subscriber per workspace. Unsubscribed subscribers are excluded from all
+/// targeting (consent); `pendingDelete` flags them for later erasure (/stop).
+model Subscriber {
+  id             String           @id @default(cuid())
+  sourceId       String
+  source         Source           @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  telegramUserId BigInt
+  username       String?
+  status         SubscriberStatus @default(active)
+  unsubscribedAt DateTime?
+  pendingDelete  Boolean          @default(false)
+  joinedAt       DateTime         @default(now())
+
+  memberships GroupMember[]
+
+  @@unique([sourceId, telegramUserId])
+  @@index([sourceId])
+  @@map("subscribers")
+}
+
+/// A subscriber segment. `isAll` marks the implicit "All" group that always
+/// exists per Source; its membership is every active subscriber, resolved
+/// dynamically (no GroupMember rows), so it can't be edited or deleted.
+model Group {
+  id        String   @id @default(cuid())
+  sourceId  String
+  source    Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  name      String
+  isAll     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  members GroupMember[]
+
+  @@unique([sourceId, name])
+  @@index([sourceId])
+  @@map("groups")
+}
+
+/// Many-to-many: a subscriber may belong to many groups. Composite PK makes
+/// adds idempotent (re-adding is a no-op upsert).
+model GroupMember {
+  groupId      String
+  subscriberId String
+  group        Group      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  addedAt      DateTime   @default(now())
+
+  @@id([groupId, subscriberId])
+  @@index([subscriberId])
+  @@map("group_members")
 }
 
 /// A reusable message template in a Source's gallery. `body` may contain named

@@ -53,6 +53,8 @@ export class SourceService {
         ownerId: owner.id,
         apiKeyHash: apiKey.hash,
         startToken: generateToken(),
+        // Every workspace ships with the implicit "All" group.
+        groups: { create: { name: 'All', isAll: true } },
       },
     });
 

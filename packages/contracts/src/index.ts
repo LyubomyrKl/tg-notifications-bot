@@ -89,3 +89,38 @@ export const NotificationView = z.object({
   updatedAt: z.string(),
 });
 export type NotificationView = z.infer<typeof NotificationView>;
+
+// ── Groups (subscriber segments) ────────────────────────────────────────────
+export const CreateGroupInput = z.object({
+  name: z.string().min(1).max(120),
+});
+export type CreateGroupInput = z.infer<typeof CreateGroupInput>;
+
+export const RenameGroupInput = z.object({
+  name: z.string().min(1).max(120),
+});
+export type RenameGroupInput = z.infer<typeof RenameGroupInput>;
+
+export const AddMembersInput = z.object({
+  subscriberIds: z.array(z.string().min(1)).min(1),
+});
+export type AddMembersInput = z.infer<typeof AddMembersInput>;
+
+export const GroupView = z.object({
+  id: z.string(),
+  name: z.string(),
+  isAll: z.boolean(),
+  memberCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+});
+export type GroupView = z.infer<typeof GroupView>;
+
+// ── Subscribers ─────────────────────────────────────────────────────────────
+export const SubscriberView = z.object({
+  id: z.string(),
+  telegramUserId: z.string(),
+  username: z.string().nullable(),
+  status: z.enum(['active', 'unsubscribed']),
+  joinedAt: z.string(),
+});
+export type SubscriberView = z.infer<typeof SubscriberView>;

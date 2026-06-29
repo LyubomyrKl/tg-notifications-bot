@@ -4,6 +4,11 @@ export { CoreModule } from './core.module';
 export { SourceModule } from './source/source.module';
 export { SourceService } from './source/source.service';
 
+export { SubscriberModule } from './subscriber/subscriber.module';
+export { SubscriberService } from './subscriber/subscriber.service';
+export { GroupModule } from './group/group.module';
+export { GroupService } from './group/group.service';
+
 export { NotificationModule } from './notification/notification.module';
 export { NotificationService } from './notification/notification.service';
 export {
