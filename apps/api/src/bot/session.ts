@@ -8,7 +8,9 @@
  */
 export interface BotSession {
   /** What free-text reply the next message should be interpreted as, if any. */
-  awaiting?: 'group_name' | 'placeholders';
+  awaiting?: 'group_name' | 'placeholders' | 'notif_name' | 'notif_body';
+  /** In-progress notification authoring (name → body). */
+  notifDraft?: { name?: string };
   /** In-progress broadcast composition. */
   broadcast?: {
     notificationId?: string;

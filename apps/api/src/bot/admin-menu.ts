@@ -87,6 +87,7 @@ export class AdminMenu {
       const items = await this.notifications.list(p.sourceId);
       const kb = new InlineKeyboard();
       items.forEach((n) => kb.text(`📝 ${n.name}`, `notif:view:${n.id}`).row());
+      kb.text('➕ New notification', 'notif:new').row();
       kb.text('⬅️ Menu', 'menu:home');
       await this.render(
         ctx,
@@ -94,6 +95,13 @@ export class AdminMenu {
         kb,
         true,
       );
+      return;
+    }
+    if (action === 'new') {
+      const s = getSession(ctx.from!.id);
+      s.notifDraft = {};
+      s.awaiting = 'notif_name';
+      await ctx.reply('✏️ Send me a name for the notification:');
       return;
     }
     if (action === 'view') {
@@ -314,6 +322,35 @@ export class AdminMenu {
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
     const session = getSession(ctx.from!.id);
+
+    if (session.awaiting === 'notif_name') {
+      session.awaiting = 'notif_body';
+      session.notifDraft = { name: text.trim() };
+      await ctx.reply(
+        '✏️ Now send the message body.\nUse {placeholders} like {name} to personalize per recipient.',
+      );
+      return;
+    }
+
+    if (session.awaiting === 'notif_body') {
+      session.awaiting = undefined;
+      const name = session.notifDraft?.name ?? 'Untitled';
+      session.notifDraft = undefined;
+      try {
+        const n = await this.notifications.create(principal.sourceId, {
+          name,
+          body: text,
+        });
+        const ph = n.placeholders.length
+          ? `\nPlaceholders detected: ${n.placeholders.join(', ')}`
+          : '';
+        await ctx.reply(`✅ Notification "${n.name}" created.${ph}`);
+        await this.openHome(ctx, false);
+      } catch (err) {
+        await ctx.reply(`⚠️ ${(err as Error).message}`);
+      }
+      return;
+    }
 
     if (session.awaiting === 'group_name') {
       session.awaiting = undefined;
