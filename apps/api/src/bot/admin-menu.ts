@@ -6,6 +6,7 @@ import {
   InviteService,
   NotificationService,
   SourceService,
+  SubscriberService,
 } from '@paedavic/core';
 import { type Bot, type Context, InlineKeyboard } from 'grammy';
 import { clearSession, getSession } from './session';
@@ -29,6 +30,7 @@ export class AdminMenu {
     private readonly groups: GroupService,
     private readonly invites: InviteService,
     private readonly broadcasts: BroadcastService,
+    private readonly subscribers: SubscriberService,
   ) {}
 
   /** Wire the menu onto the bot. Call after command handlers are registered. */
@@ -60,7 +62,8 @@ export class AdminMenu {
     if (!principal) return;
 
     try {
-      const [ns, action, arg] = data.split(':');
+      const [ns, action, ...rest] = data.split(':');
+      const arg = rest.join(':'); // e.g. "groupId:subscriberId" for toggles
       if (ns === 'menu') return void (await this.openHome(ctx, true));
       if (ns === 'notif') return void (await this.notif(ctx, principal, action, arg));
       if (ns === 'grp') return void (await this.grp(ctx, principal, action, arg));
@@ -147,9 +150,29 @@ export class AdminMenu {
       const g = (await this.groups.list(p.sourceId)).find((x) => x.id === id);
       if (!g) return this.grp(ctx, p, 'list', '');
       const kb = new InlineKeyboard();
-      if (!g.isAll) kb.text('🗑 Delete', `grp:del:${id}`);
+      // The "All" group's membership is implicit (everyone) — not editable.
+      if (!g.isAll) {
+        kb.text('👤 Manage members', `grp:mem:${id}`).row();
+        kb.text('🗑 Delete', `grp:del:${id}`);
+      }
       kb.text('⬅️ Back', 'grp:list');
       await this.render(ctx, `👥 ${g.name}\nMembers: ${g.memberCount}`, kb, true);
+      return;
+    }
+    if (action === 'mem') {
+      // Toggle UI: every active subscriber with a ✅/⬜ marker for membership.
+      await this.renderMembers(ctx, p, id);
+      return;
+    }
+    if (action === 'tog') {
+      const [groupId, subscriberId] = id.split(':');
+      const memberIds = await this.memberIdSet(p, groupId);
+      if (memberIds.has(subscriberId)) {
+        await this.groups.removeMember(p.sourceId, groupId, subscriberId);
+      } else {
+        await this.groups.addMembers(p.sourceId, groupId, [subscriberId]);
+      }
+      await this.renderMembers(ctx, p, groupId);
       return;
     }
     if (action === 'del') {
@@ -160,6 +183,44 @@ export class AdminMenu {
       getSession(ctx.from!.id).awaiting = 'group_name';
       await ctx.reply('✏️ Send me the new group name:');
     }
+  }
+
+  /** Current members of a group, as a set of subscriber ids. */
+  private async memberIdSet(
+    p: AuthPrincipal,
+    groupId: string,
+  ): Promise<Set<string>> {
+    const members = await this.groups.members(p.sourceId, groupId);
+    return new Set(members.map((m) => m.id));
+  }
+
+  /** Render the tap-to-toggle membership list for a group. */
+  private async renderMembers(
+    ctx: Context,
+    p: AuthPrincipal,
+    groupId: string,
+  ): Promise<void> {
+    const [all, memberIds] = await Promise.all([
+      this.subscribers.list(p.sourceId),
+      this.memberIdSet(p, groupId),
+    ]);
+    const kb = new InlineKeyboard();
+    all.forEach((s) => {
+      const label = s.username ? `@${s.username}` : s.telegramUserId;
+      kb.text(
+        `${memberIds.has(s.id) ? '✅' : '⬜'} ${label}`,
+        `grp:tog:${groupId}:${s.id}`,
+      ).row();
+    });
+    kb.text('⬅️ Back', `grp:view:${groupId}`);
+    await this.render(
+      ctx,
+      all.length
+        ? 'Tap a subscriber to add/remove them from this group:'
+        : 'No subscribers yet — share an invite link first.',
+      kb,
+      true,
+    );
   }
 
   // ── Invite links ───────────────────────────────────────────────────────────
