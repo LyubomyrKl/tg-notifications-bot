@@ -126,6 +126,7 @@ export class AdminMenu {
     try {
       const [ns, action, ...rest] = data.split(':');
       const arg = rest.join(':'); // e.g. "groupId:subscriberId" for toggles
+      if (ns === 'noop') return; // pagination label tap — already acked
       if (ns === 'menu') return void (await this.openHome(ctx, true));
       if (ns === 'notif') return void (await this.notif(ctx, principal, action, arg));
       if (ns === 'grp') return void (await this.grp(ctx, principal, action, arg));
@@ -150,8 +151,10 @@ export class AdminMenu {
   ): Promise<void> {
     if (action === 'list') {
       const items = await this.notifications.list(p.sourceId);
+      const { slice, pg, pages } = this.paginate(items, parseInt(id || '0', 10) || 0);
       const kb = new InlineKeyboard();
-      items.forEach((n) => kb.text(`📝 ${n.name}`, `notif:view:${n.id}`).row());
+      slice.forEach((n) => kb.text(`📝 ${n.name}`, `notif:view:${n.id}`).row());
+      this.navRow(kb, 'notif:list:', pg, pages);
       kb.text('➕ New notification', 'notif:new').row();
       kb.text('🏠 Menu', 'menu:home');
       const header = items.length
@@ -215,6 +218,30 @@ export class AdminMenu {
     return text ? `<i>${esc(text)}</i>\n\n` : '';
   }
 
+  private static readonly PAGE = 8;
+
+  /** Slice an array into a page; clamps the requested page into range. */
+  private paginate<T>(items: T[], page: number) {
+    const size = AdminMenu.PAGE;
+    const pages = Math.max(1, Math.ceil(items.length / size));
+    const pg = Math.min(Math.max(0, page), pages - 1);
+    return { slice: items.slice(pg * size, (pg + 1) * size), pg, pages };
+  }
+
+  /** Append a "◀ x/y ▶" nav row to a keyboard when there's more than one page. */
+  private navRow(
+    kb: InlineKeyboard,
+    prefix: string,
+    pg: number,
+    pages: number,
+  ): void {
+    if (pages <= 1) return;
+    if (pg > 0) kb.text('◀', `${prefix}${pg - 1}`);
+    kb.text(`${pg + 1}/${pages}`, 'noop');
+    if (pg < pages - 1) kb.text('▶', `${prefix}${pg + 1}`);
+    kb.row();
+  }
+
   // ── Groups ─────────────────────────────────────────────────────────────────
 
   private async grp(
@@ -226,11 +253,14 @@ export class AdminMenu {
   ): Promise<void> {
     if (action === 'list') {
       const items = await this.groups.list(p.sourceId);
+      const { slice, pg, pages } = this.paginate(items, parseInt(id || '0', 10) || 0);
       const kb = new InlineKeyboard();
-      items.forEach((g) =>
+      slice.forEach((g) =>
         kb.text(`👥 ${g.name} (${g.memberCount})`, `grp:view:${g.id}`).row(),
       );
-      kb.text('➕ New group', 'grp:new').text('🏠 Menu', 'menu:home');
+      this.navRow(kb, 'grp:list:', pg, pages);
+      kb.text('➕ New group', 'grp:new').row();
+      kb.text('🏠 Menu', 'menu:home');
       await this.render(ctx, this.flash(flash) + '<b>👥 Groups</b>', kb, true);
       return;
     }
@@ -255,11 +285,13 @@ export class AdminMenu {
     }
     if (action === 'mem') {
       // Toggle UI: every active subscriber with a ✅/⬜ marker for membership.
-      await this.renderMembers(ctx, p, id);
+      const [groupId, pageStr] = id.split(':');
+      await this.renderMembers(ctx, p, groupId, undefined, parseInt(pageStr || '0', 10) || 0);
       return;
     }
     if (action === 'tog') {
-      const [groupId, subscriberId] = id.split(':');
+      const [groupId, subscriberId, pageStr] = id.split(':');
+      const page = parseInt(pageStr || '0', 10) || 0;
       const memberIds = await this.memberIdSet(p, groupId);
       let flashMsg: string;
       if (memberIds.has(subscriberId)) {
@@ -269,7 +301,7 @@ export class AdminMenu {
         await this.groups.addMembers(p.sourceId, groupId, [subscriberId]);
         flashMsg = '➕ Added';
       }
-      await this.renderMembers(ctx, p, groupId, flashMsg);
+      await this.renderMembers(ctx, p, groupId, flashMsg, page);
       return;
     }
     if (action === 'del') {
@@ -311,19 +343,22 @@ export class AdminMenu {
     p: AuthPrincipal,
     groupId: string,
     flash?: string,
+    page = 0,
   ): Promise<void> {
     const [all, memberIds] = await Promise.all([
       this.subscribers.list(p.sourceId),
       this.memberIdSet(p, groupId),
     ]);
+    const { slice, pg, pages } = this.paginate(all, page);
     const kb = new InlineKeyboard();
-    all.forEach((s) => {
+    slice.forEach((s) => {
       const label = s.username ? `@${s.username}` : s.telegramUserId;
       kb.text(
         `${memberIds.has(s.id) ? '✅' : '⬜'} ${label}`,
-        `grp:tog:${groupId}:${s.id}`,
+        `grp:tog:${groupId}:${s.id}:${pg}`,
       ).row();
     });
+    this.navRow(kb, `grp:mem:${groupId}:`, pg, pages);
     kb.text('⬅️ Back', `grp:view:${groupId}`);
     const body = all.length
       ? 'Tap a subscriber to add or remove them:'
@@ -342,8 +377,9 @@ export class AdminMenu {
   ): Promise<void> {
     if (action === 'list') {
       const items = await this.invites.list(p.sourceId);
+      const { slice, pg, pages } = this.paginate(items, parseInt(id || '0', 10) || 0);
       const kb = new InlineKeyboard();
-      items.forEach((l) =>
+      slice.forEach((l) =>
         kb
           .text(
             `🔗 ${l.joinCount} joins${l.active ? '' : ' · revoked'}`,
@@ -351,7 +387,9 @@ export class AdminMenu {
           )
           .row(),
       );
-      kb.text('➕ New link', 'inv:new').text('🏠 Menu', 'menu:home');
+      this.navRow(kb, 'inv:list:', pg, pages);
+      kb.text('➕ New link', 'inv:new').row();
+      kb.text('🏠 Menu', 'menu:home');
       const header = items.length
         ? '<b>🔗 Invite links</b>'
         : '<b>🔗 Invite links</b>\n\n📭 None yet — tap ➕ to create one.';
