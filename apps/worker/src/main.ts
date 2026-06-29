@@ -8,7 +8,7 @@ async function bootstrap(): Promise<void> {
   loadConfig(); // fail fast on bad env
   const app = await NestFactory.createApplicationContext(WorkerModule);
   app.enableShutdownHooks();
-  new Logger('Worker').log('Delivery worker ready (no queues bound yet)');
+  new Logger('Worker').log('Delivery worker ready');
 }
 
 void bootstrap();

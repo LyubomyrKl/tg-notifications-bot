@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '@paedavic/database';
 import { TelegramModule } from '@paedavic/telegram';
 import { AuthModule } from './auth/auth.module';
+import { BroadcastModule } from './broadcast/broadcast.module';
 import { GroupModule } from './group/group.module';
 import { InviteModule } from './invite/invite.module';
 import { NotificationModule } from './notification/notification.module';
@@ -23,6 +24,7 @@ import { SubscriberModule } from './subscriber/subscriber.module';
     SubscriberModule,
     GroupModule,
     InviteModule,
+    BroadcastModule,
   ],
   exports: [
     SourceModule,
@@ -31,6 +33,7 @@ import { SubscriberModule } from './subscriber/subscriber.module';
     SubscriberModule,
     GroupModule,
     InviteModule,
+    BroadcastModule,
   ],
 })
 export class CoreModule {}

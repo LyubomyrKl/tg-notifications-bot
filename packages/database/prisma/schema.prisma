@@ -57,6 +57,7 @@ model Source {
   subscribers   Subscriber[]
   groups        Group[]
   inviteLinks   InviteLink[]
+  broadcasts    Broadcast[]
 
   @@index([ownerId])
   @@map("sources")
@@ -84,6 +85,7 @@ model Subscriber {
 
   memberships GroupMember[]
   inviteJoins InviteJoin[]
+  recipients  BroadcastRecipient[]
 
   @@unique([sourceId, telegramUserId])
   @@index([sourceId])
@@ -103,6 +105,7 @@ model Group {
 
   members     GroupMember[]
   inviteLinks InviteLink[]
+  targetedBy  BroadcastTarget[]
 
   @@unique([sourceId, name])
   @@index([sourceId])
@@ -147,6 +150,7 @@ model Notification {
   updatedAt DateTime @updatedAt
 
   inviteLinks InviteLink[]
+  broadcasts  Broadcast[]
 
   @@index([sourceId])
   @@map("notifications")
@@ -192,4 +196,79 @@ model InviteJoin {
   @@unique([inviteLinkId, subscriberId])
   @@index([inviteLinkId])
   @@map("invite_joins")
+}
+
+enum BroadcastStatus {
+  queued
+  sending
+  completed
+  failed
+}
+
+enum RecipientStatus {
+  queued
+  sent
+  failed
+  blocked
+}
+
+/// One send event. `sendKey` is the idempotency gate: unique per Source, so a
+/// retried POST /broadcasts with the same key returns the existing Broadcast
+/// instead of double-sending. Audit fields (createdBy/notificationId/targets/
+/// timestamps + aggregate counts) record who sent what, to whom, and when.
+model Broadcast {
+  id       String @id @default(cuid())
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id])
+
+  sendKey           String          @unique
+  status            BroadcastStatus @default(queued)
+  placeholderValues Json
+  createdBy         String // audit: which principal initiated the send
+
+  totalCount   Int @default(0)
+  sentCount    Int @default(0)
+  failedCount  Int @default(0)
+  blockedCount Int @default(0)
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  targets    BroadcastTarget[]
+  recipients BroadcastRecipient[]
+
+  @@index([sourceId])
+  @@map("broadcasts")
+}
+
+/// Audit: which groups a broadcast targeted (resolved to recipients at send).
+model BroadcastTarget {
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  groupId     String
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([broadcastId, groupId])
+  @@map("broadcast_targets")
+}
+
+/// Per-recipient delivery row. Carries the lifecycle status the worker drives:
+/// queued → sent | failed | blocked. Unique per (broadcast, subscriber) dedupes
+/// the recipient set and makes per-job processing idempotent on retry.
+model BroadcastRecipient {
+  id           String          @id @default(cuid())
+  broadcastId  String
+  broadcast    Broadcast       @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  subscriberId String
+  subscriber   Subscriber      @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  status       RecipientStatus @default(queued)
+  error        String?
+  sentAt       DateTime?
+
+  @@unique([broadcastId, subscriberId])
+  @@index([broadcastId])
+  @@map("broadcast_recipients")
 }

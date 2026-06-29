@@ -4,6 +4,7 @@ import { AdminGuard } from './auth/admin.guard';
 import { SourceAuthGuard } from './auth/source-auth.guard';
 import { BotModule } from './bot/bot.module';
 import { AuthController } from './http/auth.controller';
+import { BroadcastController } from './http/broadcast.controller';
 import { GroupController } from './http/group.controller';
 import { HealthController } from './http/health.controller';
 import { InviteLinkController } from './http/invite-link.controller';
@@ -21,6 +22,7 @@ import { SubscriberController } from './http/subscriber.controller';
     GroupController,
     SubscriberController,
     InviteLinkController,
+    BroadcastController,
   ],
   providers: [AdminGuard, SourceAuthGuard],
 })

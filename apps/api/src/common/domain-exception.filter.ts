@@ -4,6 +4,7 @@ import {
   type ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { UnfilledPlaceholdersError } from '@paedavic/core';
 
@@ -14,6 +15,8 @@ import { UnfilledPlaceholdersError } from '@paedavic/core';
  */
 @Catch()
 export class DomainExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(DomainExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse();
 
@@ -31,6 +34,9 @@ export class DomainExceptionFilter implements ExceptionFilter {
       return;
     }
 
+    this.logger.error(
+      `Unhandled exception: ${(exception as Error)?.stack ?? exception}`,
+    );
     res.status(HttpStatus.INTERNAL_SERVER_ERROR).send({
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
       message: 'Internal server error',

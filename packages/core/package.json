@@ -14,6 +14,7 @@
     "@paedavic/config": "workspace:*",
     "@paedavic/contracts": "workspace:*",
     "@paedavic/database": "workspace:*",
+    "@paedavic/queue": "workspace:*",
     "@paedavic/telegram": "workspace:*",
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2"

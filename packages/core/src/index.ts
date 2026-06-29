@@ -11,6 +11,10 @@ export { GroupService } from './group/group.service';
 export { InviteModule } from './invite/invite.module';
 export { InviteService } from './invite/invite.service';
 export type { InviteOpenResult } from './invite/invite.service';
+export { BroadcastModule } from './broadcast/broadcast.module';
+export { BroadcastService } from './broadcast/broadcast.service';
+export { BroadcastDeliveryService } from './broadcast/broadcast-delivery.service';
+export type { DeliveryOutcome } from './broadcast/broadcast-delivery.service';
 
 export { NotificationModule } from './notification/notification.module';
 export { NotificationService } from './notification/notification.service';

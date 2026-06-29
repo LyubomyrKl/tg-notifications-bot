@@ -13,5 +13,12 @@ export type {
   GroupMember,
   InviteLink,
   InviteJoin,
+  Broadcast,
+  BroadcastTarget,
+  BroadcastRecipient,
 } from '@prisma/client';
-export { SubscriberStatus } from '@prisma/client';
+export {
+  SubscriberStatus,
+  BroadcastStatus,
+  RecipientStatus,
+} from '@prisma/client';

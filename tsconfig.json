@@ -8,6 +8,7 @@
       "@paedavic/config": ["packages/config/src/index.ts"],
       "@paedavic/contracts": ["packages/contracts/src/index.ts"],
       "@paedavic/telegram": ["packages/telegram/src/index.ts"],
+      "@paedavic/queue": ["packages/queue/src/index.ts"],
       "@paedavic/core": ["packages/core/src/index.ts"]
     }
   },

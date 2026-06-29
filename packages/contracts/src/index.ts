@@ -162,3 +162,42 @@ export const InviteLinkDetail = InviteLinkView.extend({
   joins: z.array(InviteJoinView),
 });
 export type InviteLinkDetail = z.infer<typeof InviteLinkDetail>;
+
+// ── Broadcasts ──────────────────────────────────────────────────────────────
+export const CreateBroadcastInput = z.object({
+  notificationId: z.string().min(1),
+  // One or more target groups (use the "All" group id to reach everyone).
+  groupIds: z.array(z.string().min(1)).min(1),
+  placeholderValues: z.record(z.string()).default({}),
+  // Caller-supplied idempotency key — a retried send with the same key is a no-op.
+  sendKey: z.string().min(1).max(200),
+});
+export type CreateBroadcastInput = z.infer<typeof CreateBroadcastInput>;
+
+export const BroadcastView = z.object({
+  id: z.string(),
+  notificationId: z.string(),
+  status: z.enum(['queued', 'sending', 'completed', 'failed']),
+  groupIds: z.array(z.string()),
+  createdBy: z.string(),
+  totalCount: z.number().int().nonnegative(),
+  sentCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  blockedCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
+});
+export type BroadcastView = z.infer<typeof BroadcastView>;
+
+export const RecipientView = z.object({
+  subscriberId: z.string(),
+  status: z.enum(['queued', 'sent', 'failed', 'blocked']),
+  error: z.string().nullable(),
+  sentAt: z.string().nullable(),
+});
+export type RecipientView = z.infer<typeof RecipientView>;
+
+export const BroadcastDetail = BroadcastView.extend({
+  recipients: z.array(RecipientView),
+});
+export type BroadcastDetail = z.infer<typeof BroadcastDetail>;

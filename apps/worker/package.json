@@ -15,7 +15,9 @@
     "@paedavic/config": "workspace:*",
     "@paedavic/core": "workspace:*",
     "@paedavic/database": "workspace:*",
+    "@paedavic/queue": "workspace:*",
     "@paedavic/telegram": "workspace:*",
+    "bullmq": "^5.34.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },

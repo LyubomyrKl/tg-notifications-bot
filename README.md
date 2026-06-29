@@ -17,6 +17,7 @@ packages/
   database/   Prisma schema + migrations + PrismaService
   contracts/  zod DTOs + types — shared by api AND web (no drift)
   telegram/   grammY client + 429-aware send wrapper (used by api AND worker)
+  queue/      BullMQ producer + connection + backoff (api enqueues, worker consumes)
   config/     zod-validated env loader
 ```
 
@@ -41,7 +42,7 @@ Turborepo · Docker Compose. Node ≥ 20.
 | 2 | Notification gallery CRUD + placeholder validation | ✅ done |
 | 3 | Groups CRUD + membership (implicit All) | ✅ done |
 | 4 | InviteLink issue/open/revoke + attribution | ✅ done |
-| 5 | Broadcast: queue → worker → status → rate-limit | ⬜ |
+| 5 | Broadcast: queue → worker → status → rate-limit | ✅ done |
 | 6 | `/stop` consent + audit log | ⬜ |
 
 ## Quick start
