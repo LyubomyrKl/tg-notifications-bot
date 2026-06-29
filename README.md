@@ -38,7 +38,7 @@ Turborepo · Docker Compose. Node ≥ 20.
 | # | Slice | Status |
 |---|-------|--------|
 | 1 | Source provisioning + idempotent `/start` deep-link | ✅ done |
-| 2 | Notification gallery CRUD + placeholder validation | ⬜ |
+| 2 | Notification gallery CRUD + placeholder validation | ✅ done |
 | 3 | Groups CRUD + membership | ⬜ |
 | 4 | InviteLink issue/open/revoke + attribution | ⬜ |
 | 5 | Broadcast: queue → worker → status → rate-limit | ⬜ |

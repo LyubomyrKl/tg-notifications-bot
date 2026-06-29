@@ -7,6 +7,7 @@ import {
 } from '@nestjs/platform-fastify';
 import { loadConfig } from '@paedavic/config';
 import { AppModule } from './app.module';
+import { DomainExceptionFilter } from './common/domain-exception.filter';
 
 async function bootstrap(): Promise<void> {
   const cfg = loadConfig(); // fail fast on bad env before anything starts
@@ -15,6 +16,7 @@ async function bootstrap(): Promise<void> {
     new FastifyAdapter(),
   );
   app.enableShutdownHooks(); // graceful Prisma disconnect + bot stop
+  app.useGlobalFilters(new DomainExceptionFilter());
 
   await app.listen({ port: cfg.API_PORT, host: '0.0.0.0' });
   new Logger('Bootstrap').log(`API listening on :${cfg.API_PORT}`);

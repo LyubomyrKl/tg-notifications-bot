@@ -53,6 +53,35 @@ model Source {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  notifications Notification[]
+
   @@index([ownerId])
   @@map("sources")
+}
+
+/// A reusable message template in a Source's gallery. `body` may contain named
+/// {placeholders}; those names are parsed and cached in `placeholders` so a
+/// send can be rejected up front when any are left unfilled.
+model Notification {
+  id   String @id @default(cuid())
+  name String
+  body String
+
+  // Optional media attachment (photo/document/…). type stored for send routing.
+  mediaUrl  String?
+  mediaType String?
+
+  // Parsed placeholder names ({title} → "title"), deduped, cached on write.
+  placeholders String[]
+
+  // Tenant owner. Every query is scoped by this; soft-delete via archivedAt.
+  sourceId   String
+  source     Source    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sourceId])
+  @@map("notifications")
 }

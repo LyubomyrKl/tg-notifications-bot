@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '@paedavic/database';
 import { TelegramModule } from '@paedavic/telegram';
 import { AuthModule } from './auth/auth.module';
+import { NotificationModule } from './notification/notification.module';
 import { SourceModule } from './source/source.module';
 
 /**
@@ -10,7 +11,13 @@ import { SourceModule } from './source/source.module';
  * shared Prisma + Telegram clients. Transport (REST/bot/queue) lives in apps.
  */
 @Module({
-  imports: [PrismaModule, TelegramModule, SourceModule, AuthModule],
-  exports: [SourceModule, AuthModule],
+  imports: [
+    PrismaModule,
+    TelegramModule,
+    SourceModule,
+    AuthModule,
+    NotificationModule,
+  ],
+  exports: [SourceModule, AuthModule, NotificationModule],
 })
 export class CoreModule {}

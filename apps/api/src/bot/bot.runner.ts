@@ -7,7 +7,7 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { loadConfig } from '@paedavic/config';
-import { SourceService } from '@paedavic/core';
+import { NotificationService, SourceService } from '@paedavic/core';
 import { type Context, TelegramService } from '@paedavic/telegram';
 
 /**
@@ -23,6 +23,7 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
   constructor(
     private readonly telegram: TelegramService,
     private readonly sources: SourceService,
+    private readonly notifications: NotificationService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -49,6 +50,25 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         return;
       }
       await this.handleStart(ctx, token);
+    });
+
+    // /notifications — list the linked workspace's gallery. Calls the SAME
+    // NotificationService the REST controller uses (shared service method).
+    bot.command('notifications', async (ctx) => {
+      const principal = ctx.from
+        ? await this.sources.resolveByTelegramId(BigInt(ctx.from.id))
+        : null;
+      if (!principal) {
+        await ctx.reply('Open your workspace start link first to connect.');
+        return;
+      }
+      const items = await this.notifications.list(principal.sourceId);
+      if (items.length === 0) {
+        await ctx.reply('No notifications yet. Create one from the dashboard.');
+        return;
+      }
+      const lines = items.map((n, i) => `${i + 1}. ${n.name}`).join('\n');
+      await ctx.reply(`📝 Notifications (${items.length}):\n${lines}`);
     });
 
     bot.catch((err) => {

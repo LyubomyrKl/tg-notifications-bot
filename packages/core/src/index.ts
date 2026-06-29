@@ -4,6 +4,14 @@ export { CoreModule } from './core.module';
 export { SourceModule } from './source/source.module';
 export { SourceService } from './source/source.service';
 
+export { NotificationModule } from './notification/notification.module';
+export { NotificationService } from './notification/notification.service';
+export {
+  parsePlaceholders,
+  renderTemplate,
+  UnfilledPlaceholdersError,
+} from './notification/placeholder.util';
+
 export { AuthModule } from './auth/auth.module';
 export { AuthService } from './auth/auth.service';
 export { TokenService } from './auth/token.service';

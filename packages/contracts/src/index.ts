@@ -52,3 +52,40 @@ export const SourceCredentials = SourceView.extend({
   apiKey: z.string(),
 });
 export type SourceCredentials = z.infer<typeof SourceCredentials>;
+
+// ── Notifications (template gallery) ────────────────────────────────────────
+const MediaInput = z.object({
+  mediaUrl: z.string().url(),
+  mediaType: z.string().min(1).max(40),
+});
+
+export const CreateNotificationInput = z
+  .object({
+    name: z.string().min(1).max(160),
+    body: z.string().min(1),
+  })
+  .merge(MediaInput.partial());
+export type CreateNotificationInput = z.infer<typeof CreateNotificationInput>;
+
+// Partial — any subset of fields may be edited.
+export const UpdateNotificationInput = CreateNotificationInput.partial();
+export type UpdateNotificationInput = z.infer<typeof UpdateNotificationInput>;
+
+export const PreviewNotificationInput = z.object({
+  // Values for the template's named placeholders, e.g. { title: "Launch" }.
+  placeholderValues: z.record(z.string()).default({}),
+});
+export type PreviewNotificationInput = z.infer<typeof PreviewNotificationInput>;
+
+export const NotificationView = z.object({
+  id: z.string(),
+  name: z.string(),
+  body: z.string(),
+  mediaUrl: z.string().nullable(),
+  mediaType: z.string().nullable(),
+  placeholders: z.array(z.string()),
+  archivedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type NotificationView = z.infer<typeof NotificationView>;
