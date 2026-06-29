@@ -165,13 +165,21 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         'TELEGRAM_MODE=webhook is not wired yet; falling back to polling.',
       );
     }
-    // Show suggested commands in the Telegram UI (the "/" menu).
+    // Show suggested commands in the Telegram UI (the "/" menu) + the menu button.
     void this.telegram.bot.api
       .setMyCommands([
-        { command: 'menu', description: 'Open the menu' },
-        { command: 'start', description: 'Connect / subscribe' },
+        { command: 'start', description: 'Connect or open your workspace' },
+        { command: 'menu', description: 'Open the main menu' },
+        { command: 'notifications', description: 'Message templates' },
+        { command: 'groups', description: 'Subscriber groups' },
+        { command: 'links', description: 'Invite links' },
+        { command: 'send', description: 'Send a broadcast' },
+        { command: 'help', description: 'How this bot works' },
         { command: 'stop', description: 'Unsubscribe' },
       ])
+      .catch(() => undefined);
+    void this.telegram.bot.api
+      .setChatMenuButton({ menu_button: { type: 'commands' } })
       .catch(() => undefined);
 
     // grammY long-polls in the background; do not await (resolves on stop).

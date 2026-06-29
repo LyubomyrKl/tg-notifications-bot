@@ -35,9 +35,51 @@ export class AdminMenu {
 
   /** Wire the menu onto the bot. Call after command handlers are registered. */
   register(bot: Bot): void {
+    // Command shortcuts that jump straight to a menu screen (same renderers).
     bot.command('menu', (ctx) => this.openHome(ctx, false));
+    bot.command('notifications', (ctx) => this.openList(ctx, 'notif'));
+    bot.command('groups', (ctx) => this.openList(ctx, 'grp'));
+    bot.command('links', (ctx) => this.openList(ctx, 'inv'));
+    bot.command('send', (ctx) => this.openSend(ctx));
+    bot.command('help', (ctx) => this.openHelp(ctx));
+    // Callbacks + free-text must come after commands so commands win.
     bot.on('callback_query:data', (ctx) => this.onCallback(ctx));
     bot.on('message:text', (ctx) => this.onText(ctx));
+  }
+
+  /** /notifications, /groups, /links → open the matching list as a fresh card. */
+  private async openList(ctx: Context, ns: 'notif' | 'grp' | 'inv'): Promise<void> {
+    const p = await this.requireOwner(ctx);
+    if (!p) return;
+    if (ns === 'notif') await this.notif(ctx, p, 'list', '');
+    else if (ns === 'grp') await this.grp(ctx, p, 'list', '');
+    else await this.inv(ctx, p, 'list', '');
+  }
+
+  /** /send → open the broadcast composer. */
+  private async openSend(ctx: Context): Promise<void> {
+    const p = await this.requireOwner(ctx);
+    if (!p) return;
+    await this.bc(ctx, p, 'start', '');
+  }
+
+  /** /help → a short, friendly explainer (works for owners and subscribers). */
+  private async openHelp(ctx: Context): Promise<void> {
+    await ctx.reply(
+      [
+        '<b>Paedavic bot</b>',
+        '',
+        'Manage your notification workspace right here:',
+        '📝 /notifications — create &amp; manage message templates',
+        '👥 /groups — organize subscribers into segments',
+        '🔗 /links — invite links that subscribe &amp; segment people',
+        '📣 /send — send a broadcast',
+        '🏠 /menu — open the main menu',
+        '',
+        'Subscribers can use /stop to unsubscribe anytime.',
+      ].join('\n'),
+      { parse_mode: 'HTML' },
+    );
   }
 
   /** Show the main menu — `home` keyboard the owner returns to. */
