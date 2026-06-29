@@ -13,8 +13,18 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import { conversations, createConversation } from '@grammyjs/conversations';
 import { type Bot, type Context, InlineKeyboard } from 'grammy';
 import { clearSession, getSession } from './session';
+
+/** grammY conversations replay their builder; service calls are wrapped in
+ *  conversation.external() so side effects run exactly once. Typed loosely
+ *  (`any`) to avoid threading the ConversationFlavor generic through the
+ *  default-typed Bot from @paedavic/telegram. */
+type Conv = {
+  wait(): Promise<Context>;
+  external<T>(cb: () => T | Promise<T>): Promise<T>;
+};
 
 /** Escape user/content text for HTML parse_mode (only these 3 are required). */
 function esc(s: string): string {
@@ -106,13 +116,7 @@ export class AdminMenu {
   async openHome(ctx: Context, edit: boolean): Promise<void> {
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
-    const kb = new InlineKeyboard()
-      .text('📝 Notifications', 'notif:list')
-      .text('👥 Groups', 'grp:list')
-      .row()
-      .text('🔗 Invite links', 'inv:list')
-      .text('📣 Broadcast', 'bc:start');
-    await this.render(ctx, 'What would you like to do?', kb, edit);
+    await this.render(ctx, '<b>🏠 Menu</b>\nWhat would you like to do?', this.homeKeyboard(), edit);
   }
 
   // ── Callback router ────────────────────────────────────────────────────────
@@ -164,10 +168,8 @@ export class AdminMenu {
       return;
     }
     if (action === 'new') {
-      const s = getSession(ctx.from!.id);
-      s.notifDraft = {};
-      s.awaiting = 'notif_name';
-      await ctx.reply('✏️ Send me a name for the notification:');
+      await (ctx as unknown as { conversation: { enter(id: string): Promise<void> } })
+        .conversation.enter('createNotif');
       return;
     }
     if (action === 'view') {
@@ -323,8 +325,8 @@ export class AdminMenu {
       return;
     }
     if (action === 'new') {
-      getSession(ctx.from!.id).awaiting = 'group_name';
-      await ctx.reply('✏️ Send me the new group name:');
+      await (ctx as unknown as { conversation: { enter(id: string): Promise<void> } })
+        .conversation.enter('createGroup');
     }
   }
 
@@ -445,44 +447,49 @@ export class AdminMenu {
   ): Promise<void> {
     const session = getSession(ctx.from!.id);
     if (action === 'start') {
-      session.broadcast = {};
+      session.broadcast = { groupIds: [] };
       const items = await this.notifications.list(p.sourceId);
       const kb = new InlineKeyboard();
       items.forEach((n) => kb.text(`📝 ${n.name}`, `bc:notif:${n.id}`).row());
-      kb.text('⬅️ Menu', 'menu:home');
+      kb.text('🏠 Menu', 'menu:home');
       await this.render(
         ctx,
         items.length
-          ? '📣 Pick a notification to send:'
-          : 'Create a notification first.',
+          ? '<b>📣 Broadcast</b>\nPick a notification to send:'
+          : '<b>📣 Broadcast</b>\n\n📭 Create a notification first.',
         kb,
         true,
       );
       return;
     }
     if (action === 'notif') {
-      session.broadcast = { notificationId: arg };
-      const groups = await this.groups.list(p.sourceId);
-      const kb = new InlineKeyboard();
-      groups.forEach((g) =>
-        kb.text(`👥 ${g.name} (${g.memberCount})`, `bc:grp:${g.id}`).row(),
-      );
-      kb.text('⬅️ Back', 'bc:start');
-      await this.render(ctx, '📣 Send to which group?', kb, true);
+      session.broadcast = { notificationId: arg, groupIds: [] };
+      await this.renderGroupSelect(ctx, p);
       return;
     }
-    if (action === 'grp') {
-      session.broadcast = { ...session.broadcast, groupId: arg };
-      const n = await this.notifications.get(
-        p.sourceId,
-        session.broadcast.notificationId!,
-      );
+    if (action === 'gtog') {
+      const ids = session.broadcast?.groupIds ?? [];
+      const i = ids.indexOf(arg);
+      if (i >= 0) ids.splice(i, 1);
+      else ids.push(arg);
+      session.broadcast = { ...session.broadcast, groupIds: ids };
+      await this.renderGroupSelect(ctx, p);
+      return;
+    }
+    if (action === 'go') {
+      const b = session.broadcast;
+      if (!b?.notificationId || !b.groupIds?.length) {
+        await this.renderGroupSelect(ctx, p);
+        return;
+      }
+      const n = await this.notifications.get(p.sourceId, b.notificationId);
       if (n.placeholders.length) {
-        session.awaiting = 'placeholders';
-        await ctx.reply(
-          `✏️ This message has placeholders: ${n.placeholders.join(', ')}\n` +
-            `Reply with values, e.g. ${n.placeholders.map((x) => `${x}=...`).join(', ')}`,
-        );
+        // Hand off to a guided per-placeholder conversation, then it sends.
+        await (
+          ctx as unknown as {
+            conversation: { enter(id: string, ...a: string[]): Promise<void> };
+          }
+        ).conversation.enter('bcFill', b.notificationId, b.groupIds.join(','));
         return;
       }
       await this.showConfirm(ctx, p);
@@ -493,27 +500,50 @@ export class AdminMenu {
     }
   }
 
-  private async showConfirm(ctx: Context, p: AuthPrincipal): Promise<void> {
+  /** Multi-select group picker for a broadcast (✅/⬜ toggles + Continue). */
+  private async renderGroupSelect(ctx: Context, p: AuthPrincipal): Promise<void> {
     const session = getSession(ctx.from!.id);
-    const n = await this.notifications.get(
-      p.sourceId,
-      session.broadcast!.notificationId!,
+    const selected = new Set(session.broadcast?.groupIds ?? []);
+    const groups = await this.groups.list(p.sourceId);
+    const kb = new InlineKeyboard();
+    groups.forEach((g) =>
+      kb
+        .text(
+          `${selected.has(g.id) ? '✅' : '⬜'} ${g.name} (${g.memberCount})`,
+          `bc:gtog:${g.id}`,
+        )
+        .row(),
     );
-    const g = (await this.groups.list(p.sourceId)).find(
-      (x) => x.id === session.broadcast!.groupId,
-    );
-    const kb = new InlineKeyboard()
-      .text('✅ Send now', 'bc:send')
-      .text('✖ Cancel', 'menu:home');
+    if (selected.size > 0) kb.text('▶️ Continue', 'bc:go').row();
+    kb.text('✖ Cancel', 'menu:home');
     await this.render(
       ctx,
-      `📣 Send <b>${esc(n.name)}</b> to <b>${esc(g?.name ?? '')}</b>?\n` +
-        `${g?.memberCount ?? 0} recipient(s).`,
+      `<b>📣 Broadcast</b>\nSelect groups to send to (${selected.size} selected):`,
       kb,
       true,
     );
   }
 
+  private async showConfirm(ctx: Context, p: AuthPrincipal): Promise<void> {
+    const session = getSession(ctx.from!.id);
+    const b = session.broadcast!;
+    const n = await this.notifications.get(p.sourceId, b.notificationId!);
+    const names = (await this.groups.list(p.sourceId))
+      .filter((g) => b.groupIds!.includes(g.id))
+      .map((g) => g.name)
+      .join(', ');
+    const kb = new InlineKeyboard()
+      .text('✅ Send now', 'bc:send')
+      .text('✖ Cancel', 'menu:home');
+    await this.render(
+      ctx,
+      `📣 Send <b>${esc(n.name)}</b> to: ${esc(names)}?`,
+      kb,
+      true,
+    );
+  }
+
+  /** Send a broadcast with no placeholders (the placeholder path uses bcFill). */
   private async doSend(ctx: Context, p: AuthPrincipal): Promise<void> {
     const session = getSession(ctx.from!.id);
     const b = session.broadcast!;
@@ -521,100 +551,218 @@ export class AdminMenu {
       p.sourceId,
       {
         notificationId: b.notificationId!,
-        groupIds: [b.groupId!],
-        placeholderValues: b.placeholderValues ?? {},
+        groupIds: b.groupIds!,
+        placeholderValues: {},
         sendKey: `bot-${ctx.from!.id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
       },
       `telegram:${ctx.from!.id}`,
     );
     clearSession(ctx.from!.id);
-    const kb = new InlineKeyboard().text('⬅️ Menu', 'menu:home');
-    await this.render(
-      ctx,
-      `📣 Queued to ${view.totalCount} recipient(s). Delivery runs in the background.`,
-      kb,
-      false,
-    );
+    const kb = new InlineKeyboard().text('🏠 Menu', 'menu:home');
+    await this.render(ctx, this.sentSummary(view.totalCount, b.groupIds!.length), kb, true);
   }
 
-  // ── Free-text replies (group name, placeholder values) ─────────────────────
+  // ── Free-text fallback ──────────────────────────────────────────────────────
 
   private async onText(ctx: Context): Promise<void> {
     const text = ctx.message?.text ?? '';
     if (text.startsWith('/')) return; // commands handled elsewhere
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
-    const session = getSession(ctx.from!.id);
-
-    if (session.awaiting === 'notif_name') {
-      session.awaiting = 'notif_body';
-      session.notifDraft = { name: text.trim() };
-      await ctx.reply(
-        '✏️ Now send the message body.\nUse {placeholders} like {name} to personalize per recipient.',
-      );
-      return;
-    }
-
-    if (session.awaiting === 'notif_body') {
-      session.awaiting = undefined;
-      const name = session.notifDraft?.name ?? 'Untitled';
-      session.notifDraft = undefined;
-      try {
-        const n = await this.notifications.create(principal.sourceId, {
-          name,
-          body: text,
-        });
-        const ph = n.placeholders.length
-          ? `\nPlaceholders detected: ${n.placeholders.join(', ')}`
-          : '';
-        await ctx.reply(`✅ Notification "${n.name}" created.${ph}`);
-        await this.openHome(ctx, false);
-      } catch (err) {
-        await ctx.reply(`⚠️ ${(err as Error).message}`);
-      }
-      return;
-    }
-
-    if (session.awaiting === 'group_name') {
-      session.awaiting = undefined;
-      try {
-        await this.groups.create(principal.sourceId, text.trim());
-        await ctx.reply(`✅ Group "${text.trim()}" created.`);
-        await this.openHome(ctx, false);
-      } catch (err) {
-        await ctx.reply(`⚠️ ${(err as Error).message}`);
-      }
-      return;
-    }
-
-    if (session.awaiting === 'placeholders') {
-      session.awaiting = undefined;
-      session.broadcast = {
-        ...session.broadcast,
-        placeholderValues: this.parseKeyValues(text),
-      };
-      try {
-        await this.doSend(ctx, principal);
-      } catch (err) {
-        await ctx.reply(`⚠️ ${(err as Error).message}`);
-      }
-      return;
-    }
-
-    // Any other message from an owner → open the menu.
+    // Guided input is owned by conversations; a stray message just opens the menu.
     await this.openHome(ctx, false);
   }
 
-  private parseKeyValues(text: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const pair of text.split(',')) {
-      const idx = pair.indexOf('=');
-      if (idx === -1) continue;
-      const key = pair.slice(0, idx).trim();
-      const value = pair.slice(idx + 1).trim();
-      if (key) out[key] = value;
+  // ── Conversations (guided multi-step input) ────────────────────────────────
+
+  /** Install the conversations engine + builders. Call BEFORE other handlers so
+   *  an active conversation captures input ahead of the command/callback routes. */
+  installConversations(bot: Bot): void {
+    bot.use(conversations() as never);
+    bot.use(createConversation(this.createNotifConvo as never, 'createNotif') as never);
+    bot.use(createConversation(this.createGroupConvo as never, 'createGroup') as never);
+    bot.use(createConversation(this.bcFillConvo as never, 'bcFill') as never);
+  }
+
+  /** Guided notification authoring: name → body, Cancel at every step. */
+  private createNotifConvo = async (conversation: Conv, ctx: Context): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    await ctx.reply('📝 <b>New notification</b> (step 1/2)\nSend a name:', {
+      parse_mode: 'HTML',
+      reply_markup: cancel,
+    });
+    let name = '';
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = (u.message?.text ?? '').trim();
+      if (!t) {
+        await ctx.reply('Please send a name as text, or ✖ Cancel.', { reply_markup: cancel });
+        continue;
+      }
+      if (t.length > 160) {
+        await ctx.reply('That name is too long (max 160). Try again.', { reply_markup: cancel });
+        continue;
+      }
+      name = t;
+      break;
     }
-    return out;
+    await ctx.reply(
+      `📝 <b>New notification</b> (step 2/2)\n<i>Name:</i> ${esc(name)}\n\n` +
+        'Send the message body. Use {placeholders} like {name} to personalize.',
+      { parse_mode: 'HTML', reply_markup: cancel },
+    );
+    let body = '';
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = u.message?.text;
+      if (!t) {
+        await ctx.reply('Please send the body as text, or ✖ Cancel.', { reply_markup: cancel });
+        continue;
+      }
+      body = t;
+      break;
+    }
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    try {
+      const n = await conversation.external(() =>
+        this.notifications.create(sourceId, { name, body }),
+      );
+      const ph = n.placeholders.length
+        ? `\n<i>Placeholders:</i> ${esc(n.placeholders.map((x) => `{${x}}`).join(', '))}`
+        : '';
+      await ctx.reply(`✅ Created <b>${esc(n.name)}</b>.${ph}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`⚠️ ${esc(humanError(err))}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    }
+  };
+
+  /** Guided group creation: one name, retry-on-conflict, Cancel anytime. */
+  private createGroupConvo = async (conversation: Conv, ctx: Context): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    await ctx.reply('👥 <b>New group</b>\nSend a name:', {
+      parse_mode: 'HTML',
+      reply_markup: cancel,
+    });
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = (u.message?.text ?? '').trim();
+      if (!t) {
+        await ctx.reply('Please send a name, or ✖ Cancel.', { reply_markup: cancel });
+        continue;
+      }
+      const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+      if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+      try {
+        await conversation.external(() => this.groups.create(sourceId, t));
+        await ctx.reply(`✅ Group <b>${esc(t)}</b> created.`, {
+          parse_mode: 'HTML',
+          reply_markup: this.homeKeyboard(),
+        });
+        return;
+      } catch (err) {
+        await ctx.reply(`⚠️ ${esc(humanError(err))}\nTry another name, or ✖ Cancel.`, {
+          parse_mode: 'HTML',
+          reply_markup: cancel,
+        });
+      }
+    }
+  };
+
+  /** Guided placeholder fill (one prompt per placeholder), then send. */
+  private bcFillConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    notifId: string,
+    groupCsv: string,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    const n = await conversation.external(() => this.notifications.get(sourceId, notifId));
+    const values: Record<string, string> = {};
+    for (const ph of n.placeholders) {
+      await ctx.reply(`✏️ Value for <b>{${esc(ph)}}</b>:`, {
+        parse_mode: 'HTML',
+        reply_markup: cancel,
+      });
+      for (;;) {
+        const u = await conversation.wait();
+        if (this.isCancel(u)) return this.cancelled(ctx, u);
+        const t = u.message?.text;
+        if (t === undefined || t === '') {
+          await ctx.reply('Please send a value, or ✖ Cancel.', { reply_markup: cancel });
+          continue;
+        }
+        values[ph] = t;
+        break;
+      }
+    }
+    const groupIds = groupCsv.split(',').filter(Boolean);
+    try {
+      const view = await conversation.external(() =>
+        this.broadcasts.create(
+          sourceId,
+          {
+            notificationId: notifId,
+            groupIds,
+            placeholderValues: values,
+            sendKey: `bot-${ctx.from?.id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+          },
+          `telegram:${ctx.from?.id}`,
+        ),
+      );
+      await ctx.reply(this.sentSummary(view.totalCount, groupIds.length), {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`⚠️ ${esc(humanError(err))}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    }
+  };
+
+  /** Any button tap or command during a conversation cancels it. */
+  private isCancel(u: Context): boolean {
+    return !!u.callbackQuery || !!u.message?.text?.startsWith('/');
+  }
+
+  private async cancelled(ctx: Context, u: Context): Promise<void> {
+    if (u.callbackQuery) await u.answerCallbackQuery().catch(() => undefined);
+    await ctx.reply('✖ Cancelled.', { reply_markup: this.homeKeyboard() });
+  }
+
+  private async ownerSourceId(ctx: Context): Promise<string | null> {
+    if (!ctx.from) return null;
+    const p = await this.sources.resolveByTelegramId(BigInt(ctx.from.id));
+    return p?.sourceId ?? null;
+  }
+
+  private homeKeyboard(): InlineKeyboard {
+    return new InlineKeyboard()
+      .text('📝 Notifications', 'notif:list')
+      .text('👥 Groups', 'grp:list')
+      .row()
+      .text('🔗 Invite links', 'inv:list')
+      .text('📣 Broadcast', 'bc:start');
+  }
+
+  private sentSummary(recipients: number, groupCount: number): string {
+    return (
+      `✅ <b>Queued</b> · ${groupCount} group(s) · ${recipients} recipient(s).\n` +
+      'Delivery runs in the background.'
+    );
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────

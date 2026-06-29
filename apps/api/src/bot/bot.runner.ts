@@ -48,6 +48,10 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
   private registerHandlers(): void {
     const bot = this.telegram.bot;
 
+    // Install the conversations engine FIRST so an active guided flow captures
+    // the user's input ahead of the command/callback routes below.
+    this.adminMenu.installConversations(bot);
+
     // /start <token> — provision-link a workspace, or generic welcome.
     bot.command('start', async (ctx) => {
       const token = ctx.match?.trim();
