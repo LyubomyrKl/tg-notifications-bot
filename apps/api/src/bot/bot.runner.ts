@@ -9,13 +9,12 @@ import {
 } from '@nestjs/common';
 import { loadConfig } from '@paedavic/config';
 import {
-  GroupService,
   InviteService,
-  NotificationService,
   SourceService,
   SubscriberService,
 } from '@paedavic/core';
 import { type Context, TelegramService } from '@paedavic/telegram';
+import { AdminMenu } from './admin-menu';
 
 /**
  * The bot runtime (app-shaped): registers grammY command handlers and starts
@@ -30,10 +29,9 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
   constructor(
     private readonly telegram: TelegramService,
     private readonly sources: SourceService,
-    private readonly notifications: NotificationService,
-    private readonly groups: GroupService,
     private readonly invites: InviteService,
     private readonly subscribers: SubscriberService,
+    private readonly adminMenu: AdminMenu,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -54,47 +52,15 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     bot.command('start', async (ctx) => {
       const token = ctx.match?.trim();
       if (!token) {
-        await ctx.reply(
-          'Welcome to Paedavic. Open a workspace start link to connect.',
-        );
+        // No payload: linked owners get the menu; everyone else, a welcome.
+        const linked = ctx.from
+          ? await this.sources.resolveByTelegramId(BigInt(ctx.from.id))
+          : null;
+        if (linked) await this.adminMenu.openHome(ctx, false);
+        else await ctx.reply('Welcome to Paedavic. Open a workspace start link to connect.');
         return;
       }
       await this.handleStart(ctx, token);
-    });
-
-    // /notifications — list the linked workspace's gallery. Calls the SAME
-    // NotificationService the REST controller uses (shared service method).
-    bot.command('notifications', async (ctx) => {
-      const principal = ctx.from
-        ? await this.sources.resolveByTelegramId(BigInt(ctx.from.id))
-        : null;
-      if (!principal) {
-        await ctx.reply('Open your workspace start link first to connect.');
-        return;
-      }
-      const items = await this.notifications.list(principal.sourceId);
-      if (items.length === 0) {
-        await ctx.reply('No notifications yet. Create one from the dashboard.');
-        return;
-      }
-      const lines = items.map((n, i) => `${i + 1}. ${n.name}`).join('\n');
-      await ctx.reply(`📝 Notifications (${items.length}):\n${lines}`);
-    });
-
-    // /groups — list the workspace's segments + sizes (shared GroupService).
-    bot.command('groups', async (ctx) => {
-      const principal = ctx.from
-        ? await this.sources.resolveByTelegramId(BigInt(ctx.from.id))
-        : null;
-      if (!principal) {
-        await ctx.reply('Open your workspace start link first to connect.');
-        return;
-      }
-      const groups = await this.groups.list(principal.sourceId);
-      const lines = groups
-        .map((g) => `• ${g.name}${g.isAll ? ' (all)' : ''} — ${g.memberCount}`)
-        .join('\n');
-      await ctx.reply(`👥 Groups:\n${lines}`);
     });
 
     // /stop — consent exit. Unsubscribe from every workspace + flag for deletion.
@@ -109,6 +75,10 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
           : "You weren't subscribed to anything.",
       );
     });
+
+    // Button-driven admin UI (callbacks + /menu + free-text replies). Registered
+    // after the command handlers so commands keep precedence over message:text.
+    this.adminMenu.register(bot);
 
     bot.catch((err) => {
       this.logger.error(`Unhandled bot error: ${err.error}`);
@@ -141,9 +111,9 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
   ): Promise<void> {
     try {
       const source = await this.sources.linkTelegram(token, telegramUserId);
-      await ctx.reply(
-        `✅ Connected to workspace "${source.name}". You can manage notifications from here.`,
-      );
+      await ctx.reply(`✅ Connected to workspace "${source.name}".`);
+      await this.adminMenu.openHome(ctx, false); // drop straight into the menu
+      return;
     } catch (err) {
       if (err instanceof NotFoundException) {
         await ctx.reply('⚠️ This start link is invalid or has expired.');
@@ -195,6 +165,15 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         'TELEGRAM_MODE=webhook is not wired yet; falling back to polling.',
       );
     }
+    // Show suggested commands in the Telegram UI (the "/" menu).
+    void this.telegram.bot.api
+      .setMyCommands([
+        { command: 'menu', description: 'Open the menu' },
+        { command: 'start', description: 'Connect / subscribe' },
+        { command: 'stop', description: 'Unsubscribe' },
+      ])
+      .catch(() => undefined);
+
     // grammY long-polls in the background; do not await (resolves on stop).
     void this.telegram.bot.start({
       onStart: (info) =>

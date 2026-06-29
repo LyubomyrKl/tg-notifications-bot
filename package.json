@@ -12,9 +12,9 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
-    "db:generate": "pnpm --filter @paedavic/database generate",
-    "db:migrate": "pnpm --filter @paedavic/database migrate",
-    "db:deploy": "pnpm --filter @paedavic/database deploy"
+    "db:generate": "pnpm --filter @paedavic/database run generate",
+    "db:migrate": "pnpm --filter @paedavic/database run migrate",
+    "db:deploy": "pnpm --filter @paedavic/database run deploy"
   },
   "devDependencies": {
     "turbo": "^2.1.3",
