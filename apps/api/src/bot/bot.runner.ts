@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -9,6 +10,7 @@ import {
 import { loadConfig } from '@paedavic/config';
 import {
   GroupService,
+  InviteService,
   NotificationService,
   SourceService,
 } from '@paedavic/core';
@@ -29,6 +31,7 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly sources: SourceService,
     private readonly notifications: NotificationService,
     private readonly groups: GroupService,
+    private readonly invites: InviteService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -97,19 +100,32 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     });
   }
 
-  /** Idempotent: reopening a link re-confirms the existing binding. */
+  /**
+   * Routes the /start payload: `inv_…` tokens are invite links (subscribe flow);
+   * anything else is a workspace start token (owner-links their Telegram id).
+   * Both paths are idempotent.
+   */
   private async handleStart(ctx: Context, token: string): Promise<void> {
     const telegramUserId = ctx.from?.id;
     if (!telegramUserId) {
       await ctx.reply('Could not read your Telegram identity. Try again.');
       return;
     }
+    if (InviteService.isInviteToken(token)) {
+      await this.handleInvite(ctx, token, BigInt(telegramUserId));
+    } else {
+      await this.handleWorkspaceLink(ctx, token, BigInt(telegramUserId));
+    }
+  }
 
+  /** Owner links their Telegram account to a workspace (idempotent). */
+  private async handleWorkspaceLink(
+    ctx: Context,
+    token: string,
+    telegramUserId: bigint,
+  ): Promise<void> {
     try {
-      const source = await this.sources.linkTelegram(
-        token,
-        BigInt(telegramUserId),
-      );
+      const source = await this.sources.linkTelegram(token, telegramUserId);
       await ctx.reply(
         `✅ Connected to workspace "${source.name}". You can manage notifications from here.`,
       );
@@ -119,7 +135,38 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       } else if (err instanceof ConflictException) {
         await ctx.reply(`⚠️ ${err.message}`);
       } else {
-        this.logger.error(`/start failed: ${(err as Error).message}`);
+        this.logger.error(`/start link failed: ${(err as Error).message}`);
+        await ctx.reply('Something went wrong. Please try again later.');
+      }
+    }
+  }
+
+  /** Subscriber joins via an invite link (idempotent). */
+  private async handleInvite(
+    ctx: Context,
+    token: string,
+    telegramUserId: bigint,
+  ): Promise<void> {
+    try {
+      const result = await this.invites.open(
+        token,
+        telegramUserId,
+        ctx.from?.username,
+      );
+      const group = result.groupName ? ` and added to "${result.groupName}"` : '';
+      await ctx.reply(
+        result.alreadyJoined
+          ? `👋 You're already subscribed to "${result.sourceName}".`
+          : `🎉 Subscribed to "${result.sourceName}"${group}.`,
+      );
+    } catch (err) {
+      if (
+        err instanceof NotFoundException ||
+        err instanceof BadRequestException
+      ) {
+        await ctx.reply(`⚠️ ${(err as Error).message}`);
+      } else {
+        this.logger.error(`/start invite failed: ${(err as Error).message}`);
         await ctx.reply('Something went wrong. Please try again later.');
       }
     }

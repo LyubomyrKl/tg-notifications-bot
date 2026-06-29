@@ -11,5 +11,7 @@ export type {
   Subscriber,
   Group,
   GroupMember,
+  InviteLink,
+  InviteJoin,
 } from '@prisma/client';
 export { SubscriberStatus } from '@prisma/client';

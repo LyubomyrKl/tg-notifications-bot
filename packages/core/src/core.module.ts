@@ -3,6 +3,7 @@ import { PrismaModule } from '@paedavic/database';
 import { TelegramModule } from '@paedavic/telegram';
 import { AuthModule } from './auth/auth.module';
 import { GroupModule } from './group/group.module';
+import { InviteModule } from './invite/invite.module';
 import { NotificationModule } from './notification/notification.module';
 import { SourceModule } from './source/source.module';
 import { SubscriberModule } from './subscriber/subscriber.module';
@@ -21,6 +22,7 @@ import { SubscriberModule } from './subscriber/subscriber.module';
     NotificationModule,
     SubscriberModule,
     GroupModule,
+    InviteModule,
   ],
   exports: [
     SourceModule,
@@ -28,6 +30,7 @@ import { SubscriberModule } from './subscriber/subscriber.module';
     NotificationModule,
     SubscriberModule,
     GroupModule,
+    InviteModule,
   ],
 })
 export class CoreModule {}

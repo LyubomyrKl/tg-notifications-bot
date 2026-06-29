@@ -8,6 +8,9 @@ export { SubscriberModule } from './subscriber/subscriber.module';
 export { SubscriberService } from './subscriber/subscriber.service';
 export { GroupModule } from './group/group.module';
 export { GroupService } from './group/group.service';
+export { InviteModule } from './invite/invite.module';
+export { InviteService } from './invite/invite.service';
+export type { InviteOpenResult } from './invite/invite.service';
 
 export { NotificationModule } from './notification/notification.module';
 export { NotificationService } from './notification/notification.service';

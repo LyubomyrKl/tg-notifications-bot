@@ -56,6 +56,7 @@ model Source {
   notifications Notification[]
   subscribers   Subscriber[]
   groups        Group[]
+  inviteLinks   InviteLink[]
 
   @@index([ownerId])
   @@map("sources")
@@ -82,6 +83,7 @@ model Subscriber {
   joinedAt       DateTime         @default(now())
 
   memberships GroupMember[]
+  inviteJoins InviteJoin[]
 
   @@unique([sourceId, telegramUserId])
   @@index([sourceId])
@@ -99,7 +101,8 @@ model Group {
   isAll     Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  members GroupMember[]
+  members     GroupMember[]
+  inviteLinks InviteLink[]
 
   @@unique([sourceId, name])
   @@index([sourceId])
@@ -143,6 +146,50 @@ model Notification {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  inviteLinks InviteLink[]
+
   @@index([sourceId])
   @@map("notifications")
+}
+
+/// A signed deep-link that subscribes whoever opens it. Optionally binds the
+/// new subscriber to a Group and carries a default Notification. Random + DB
+/// lookup token (prefixed `inv_`); revocable (revokedAt) and optionally
+/// expiring. joinCount + InviteJoin rows give per-link attribution.
+model InviteLink {
+  id       String @id @default(cuid())
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  token    String @unique
+
+  // Optional bindings — validated to belong to the same Source at creation.
+  groupId        String?
+  group          Group?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  notificationId String?
+  notification   Notification? @relation(fields: [notificationId], references: [id], onDelete: SetNull)
+
+  expiresAt DateTime?
+  revokedAt DateTime?
+  joinCount Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  joins InviteJoin[]
+
+  @@index([sourceId])
+  @@map("invite_links")
+}
+
+/// Attribution: which subscriber joined via which link, and when. Unique per
+/// (link, subscriber) so reopening a link is idempotent (no double-count).
+model InviteJoin {
+  id           String     @id @default(cuid())
+  inviteLinkId String
+  inviteLink   InviteLink @relation(fields: [inviteLinkId], references: [id], onDelete: Cascade)
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  joinedAt     DateTime   @default(now())
+
+  @@unique([inviteLinkId, subscriberId])
+  @@index([inviteLinkId])
+  @@map("invite_joins")
 }

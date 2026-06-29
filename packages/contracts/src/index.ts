@@ -124,3 +124,41 @@ export const SubscriberView = z.object({
   joinedAt: z.string(),
 });
 export type SubscriberView = z.infer<typeof SubscriberView>;
+
+// ── Invite links ────────────────────────────────────────────────────────────
+export const CreateInviteLinkInput = z.object({
+  // Optional bindings; both validated to belong to the caller's Source.
+  groupId: z.string().min(1).optional(),
+  notificationId: z.string().min(1).optional(),
+  // ISO timestamp; omit for a non-expiring link.
+  expiresAt: z.string().datetime().optional(),
+});
+export type CreateInviteLinkInput = z.infer<typeof CreateInviteLinkInput>;
+
+export const InviteLinkView = z.object({
+  id: z.string(),
+  url: z.string(),
+  token: z.string(),
+  groupId: z.string().nullable(),
+  notificationId: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  active: z.boolean(), // not revoked and not expired
+  joinCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+});
+export type InviteLinkView = z.infer<typeof InviteLinkView>;
+
+/** Per-link attribution: who joined through it and when. */
+export const InviteJoinView = z.object({
+  subscriberId: z.string(),
+  telegramUserId: z.string(),
+  username: z.string().nullable(),
+  joinedAt: z.string(),
+});
+export type InviteJoinView = z.infer<typeof InviteJoinView>;
+
+export const InviteLinkDetail = InviteLinkView.extend({
+  joins: z.array(InviteJoinView),
+});
+export type InviteLinkDetail = z.infer<typeof InviteLinkDetail>;
