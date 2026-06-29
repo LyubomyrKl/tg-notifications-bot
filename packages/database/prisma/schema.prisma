@@ -58,9 +58,29 @@ model Source {
   groups        Group[]
   inviteLinks   InviteLink[]
   broadcasts    Broadcast[]
+  auditLogs     AuditLog[]
 
   @@index([ownerId])
   @@map("sources")
+}
+
+/// Append-only audit trail of meaningful Source actions (broadcast sent,
+/// subscriber unsubscribed, …). `actor` is the principal id/transport, `action`
+/// a stable verb, `metadata` the action-specific detail. Source-scoped like
+/// everything else. Keeps the door open for richer compliance/reporting later.
+model AuditLog {
+  id       String @id @default(cuid())
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  actor    String
+  action   String
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([sourceId, createdAt])
+  @@map("audit_logs")
 }
 
 enum SubscriberStatus {

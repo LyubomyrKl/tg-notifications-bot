@@ -43,7 +43,7 @@ Turborepo · Docker Compose. Node ≥ 20.
 | 3 | Groups CRUD + membership (implicit All) | ✅ done |
 | 4 | InviteLink issue/open/revoke + attribution | ✅ done |
 | 5 | Broadcast: queue → worker → status → rate-limit | ✅ done |
-| 6 | `/stop` consent + audit log | ⬜ |
+| 6 | `/stop` consent + audit log | ✅ done |
 
 ## Quick start
 

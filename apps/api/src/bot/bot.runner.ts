@@ -13,6 +13,7 @@ import {
   InviteService,
   NotificationService,
   SourceService,
+  SubscriberService,
 } from '@paedavic/core';
 import { type Context, TelegramService } from '@paedavic/telegram';
 
@@ -32,6 +33,7 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly notifications: NotificationService,
     private readonly groups: GroupService,
     private readonly invites: InviteService,
+    private readonly subscribers: SubscriberService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -93,6 +95,19 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         .map((g) => `• ${g.name}${g.isAll ? ' (all)' : ''} — ${g.memberCount}`)
         .join('\n');
       await ctx.reply(`👥 Groups:\n${lines}`);
+    });
+
+    // /stop — consent exit. Unsubscribe from every workspace + flag for deletion.
+    bot.command('stop', async (ctx) => {
+      if (!ctx.from) return;
+      const count = await this.subscribers.unsubscribeByTelegramId(
+        BigInt(ctx.from.id),
+      );
+      await ctx.reply(
+        count > 0
+          ? `🛑 Unsubscribed from ${count} workspace${count > 1 ? 's' : ''}. You won't receive further messages.`
+          : "You weren't subscribed to anything.",
+      );
     });
 
     bot.catch((err) => {

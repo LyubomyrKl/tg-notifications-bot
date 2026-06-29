@@ -83,7 +83,7 @@ describe('BroadcastService.create', () => {
 
   it('rejects a send with unfilled placeholders', async () => {
     const fake = makeFakePrisma();
-    const svc = new BroadcastService(fake as any, queue as any);
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
     await expect(
       svc.create('src_A', {
         notificationId: 'n1',
@@ -97,7 +97,7 @@ describe('BroadcastService.create', () => {
 
   it('resolves recipients at send time, excluding unsubscribed', async () => {
     const fake = makeFakePrisma();
-    const svc = new BroadcastService(fake as any, queue as any);
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
     const view = await svc.create('src_A', {
       notificationId: 'n1',
       groupIds: ['g_all'],
@@ -113,7 +113,7 @@ describe('BroadcastService.create', () => {
 
   it('is idempotent on sendKey — returns existing, no re-enqueue', async () => {
     const fake = makeFakePrisma();
-    const svc = new BroadcastService(fake as any, queue as any);
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
     const first = await svc.create('src_A', {
       notificationId: 'n1',
       groupIds: ['g_all'],
@@ -135,7 +135,7 @@ describe('BroadcastService.create', () => {
 
   it('rejects a notification from another tenant', async () => {
     const fake = makeFakePrisma();
-    const svc = new BroadcastService(fake as any, queue as any);
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
     await expect(
       svc.create('src_B', {
         notificationId: 'n1',

@@ -201,3 +201,13 @@ export const BroadcastDetail = BroadcastView.extend({
   recipients: z.array(RecipientView),
 });
 export type BroadcastDetail = z.infer<typeof BroadcastDetail>;
+
+// ── Audit log ───────────────────────────────────────────────────────────────
+export const AuditEntryView = z.object({
+  id: z.string(),
+  actor: z.string(),
+  action: z.string(),
+  metadata: z.record(z.unknown()).nullable(),
+  createdAt: z.string(),
+});
+export type AuditEntryView = z.infer<typeof AuditEntryView>;

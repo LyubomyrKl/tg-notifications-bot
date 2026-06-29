@@ -3,6 +3,7 @@ import { CoreModule } from '@paedavic/core';
 import { AdminGuard } from './auth/admin.guard';
 import { SourceAuthGuard } from './auth/source-auth.guard';
 import { BotModule } from './bot/bot.module';
+import { AuditController } from './http/audit.controller';
 import { AuthController } from './http/auth.controller';
 import { BroadcastController } from './http/broadcast.controller';
 import { GroupController } from './http/group.controller';
@@ -23,6 +24,7 @@ import { SubscriberController } from './http/subscriber.controller';
     SubscriberController,
     InviteLinkController,
     BroadcastController,
+    AuditController,
   ],
   providers: [AdminGuard, SourceAuthGuard],
 })

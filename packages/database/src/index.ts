@@ -16,6 +16,7 @@ export type {
   Broadcast,
   BroadcastTarget,
   BroadcastRecipient,
+  AuditLog,
 } from '@prisma/client';
 export {
   SubscriberStatus,

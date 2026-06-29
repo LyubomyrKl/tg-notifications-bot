@@ -120,7 +120,7 @@ describe('InviteService.open', () => {
     const svc = new InviteService(
       fake,
       telegram as any,
-      new SubscriberService(fake),
+      new SubscriberService(fake, { record: async () => {} } as any),
     );
 
     const r1 = await svc.open('inv_abc', 777n, 'neo');
@@ -142,7 +142,7 @@ describe('InviteService.open', () => {
   it('rejects a revoked link', async () => {
     const fake = makeFakePrisma();
     seedLink(fake, { revokedAt: new Date('2020-01-01') });
-    const svc = new InviteService(fake, telegram as any, new SubscriberService(fake));
+    const svc = new InviteService(fake, telegram as any, new SubscriberService(fake, { record: async () => {} } as any));
     await expect(svc.open('inv_abc', 1n, undefined)).rejects.toBeInstanceOf(
       BadRequestException,
     );
@@ -151,7 +151,7 @@ describe('InviteService.open', () => {
   it('rejects an expired link', async () => {
     const fake = makeFakePrisma();
     seedLink(fake, { expiresAt: new Date('2020-01-01') });
-    const svc = new InviteService(fake, telegram as any, new SubscriberService(fake));
+    const svc = new InviteService(fake, telegram as any, new SubscriberService(fake, { record: async () => {} } as any));
     await expect(
       svc.open('inv_abc', 1n, undefined, new Date('2026-01-01')),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -166,7 +166,7 @@ describe('InviteService.open', () => {
       telegramUserId: 5n,
       status: 'unsubscribed',
     });
-    const svc = new InviteService(fake, telegram as any, new SubscriberService(fake));
+    const svc = new InviteService(fake, telegram as any, new SubscriberService(fake, { record: async () => {} } as any));
 
     await svc.open('inv_abc', 5n, undefined);
     expect(fake.subscribers[0].status).toBe('active');

@@ -12,6 +12,7 @@ import {
   SubscriberStatus,
 } from '@paedavic/database';
 import { BroadcastQueue } from '@paedavic/queue';
+import { AuditAction, AuditService } from '../audit/audit.service';
 import { renderTemplate } from '../notification/placeholder.util';
 
 type BroadcastWithTargets = Broadcast & {
@@ -30,6 +31,7 @@ export class BroadcastService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queue: BroadcastQueue,
+    private readonly audit: AuditService,
   ) {}
 
   async create(
@@ -121,6 +123,14 @@ export class BroadcastService {
     await this.queue.enqueueRecipients(
       recipients.map((r) => ({ broadcastId: broadcast.id, recipientId: r.id })),
     );
+
+    // Audit: who sent what, to which groups, and how many recipients.
+    await this.audit.record(sourceId, createdBy, AuditAction.BroadcastCreated, {
+      broadcastId: broadcast.id,
+      notificationId: notification.id,
+      groupIds,
+      totalCount: subscribers.length,
+    });
 
     return this.toView(broadcast);
   }
