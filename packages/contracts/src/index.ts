@@ -1,0 +1,54 @@
+import { z } from 'zod';
+
+/**
+ * The wire contract for the platform API. Both the Nest app (request validation)
+ * and the future web dashboard (typed requests/responses) import these, so the
+ * two clients can never drift. Add new slices' DTOs here.
+ */
+
+// ── Auth (web dashboard, email/password → JWT) ──────────────────────────────
+export const RegisterInput = z.object({
+  email: z.string().email(),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  // Name for the workspace created alongside the account.
+  workspaceName: z.string().min(1).max(120),
+});
+export type RegisterInput = z.infer<typeof RegisterInput>;
+
+export const LoginInput = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+export type LoginInput = z.infer<typeof LoginInput>;
+
+export const AuthResult = z.object({
+  token: z.string(),
+  user: z.object({ id: z.string(), email: z.string().email() }),
+  source: z.object({ id: z.string(), name: z.string() }),
+});
+export type AuthResult = z.infer<typeof AuthResult>;
+
+// ── Source provisioning ─────────────────────────────────────────────────────
+export const CreateSourceInput = z.object({
+  ownerEmail: z.string().email(),
+  ownerPassword: z.string().min(8),
+  name: z.string().min(1).max(120),
+});
+export type CreateSourceInput = z.infer<typeof CreateSourceInput>;
+
+export const SourceView = z.object({
+  id: z.string(),
+  name: z.string(),
+  telegramUserId: z.string().nullable(), // BigInt serialized as string
+  telegramLinked: z.boolean(),
+  startLink: z.string(), // t.me/<bot>?start=<token>
+  archivedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type SourceView = z.infer<typeof SourceView>;
+
+/** Returned once at provisioning — the only time the raw API key is shown. */
+export const SourceCredentials = SourceView.extend({
+  apiKey: z.string(),
+});
+export type SourceCredentials = z.infer<typeof SourceCredentials>;

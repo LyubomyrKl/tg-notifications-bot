@@ -1,0 +1,16 @@
+{
+  "// note": "IDE + ts-node (dev) config. Maps @paedavic/* to source so dev needs no prebuild. Package/app BUILDS use their own tsconfig (no paths) and resolve via node_modules dist.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@paedavic/database": ["packages/database/src/index.ts"],
+      "@paedavic/config": ["packages/config/src/index.ts"],
+      "@paedavic/contracts": ["packages/contracts/src/index.ts"],
+      "@paedavic/telegram": ["packages/telegram/src/index.ts"],
+      "@paedavic/core": ["packages/core/src/index.ts"]
+    }
+  },
+  "include": ["apps/**/*.ts", "packages/**/*.ts"],
+  "exclude": ["**/dist/**", "**/node_modules/**"]
+}

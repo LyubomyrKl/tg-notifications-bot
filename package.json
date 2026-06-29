@@ -1,0 +1,23 @@
+{
+  "name": "paedavic",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @paedavic/database generate",
+    "db:migrate": "pnpm --filter @paedavic/database migrate",
+    "db:deploy": "pnpm --filter @paedavic/database deploy"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.3",
+    "typescript": "^5.6.3"
+  }
+}

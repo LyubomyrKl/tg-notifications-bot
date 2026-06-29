@@ -1,0 +1,58 @@
+// Paedavic — Telegram notification platform
+// Slice 1 scope: identity (User) + workspace (Source).
+// Later slices add Notification, Group, Subscriber, InviteLink, Broadcast via
+// their own migrations. Enums/relations here already leave room for those.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Web-dashboard account. Owns one or more workspaces.
+/// Single-owner today; the one-to-many relation already supports teams later
+/// without restructuring (a future Membership join table would slot in here).
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sources Source[]
+
+  @@map("users")
+}
+
+/// A publisher workspace. The unit of tenant isolation: every other entity is
+/// scoped by sourceId, and a Source can never read/target another's data.
+model Source {
+  id   String @id @default(cuid())
+  name String
+
+  // Web account that owns this workspace.
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Telegram identity of the owner, bound when they open the /start deep-link.
+  // Nullable until linked; unique so a Telegram account maps to one workspace.
+  telegramUserId BigInt? @unique
+
+  // REST auth for programmatic/external callers. Stores a hash, never the key.
+  apiKeyHash String @unique
+
+  // Opaque token embedded in t.me/<bot>?start=<startToken>. Random + DB lookup.
+  startToken String @unique
+
+  // Soft-delete only — archived workspaces are excluded, never hard-deleted.
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+  @@map("sources")
+}

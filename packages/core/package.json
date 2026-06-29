@@ -1,0 +1,30 @@
+{
+  "name": "@paedavic/core",
+  "version": "0.0.1",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@paedavic/config": "workspace:*",
+    "@paedavic/contracts": "workspace:*",
+    "@paedavic/database": "workspace:*",
+    "@paedavic/telegram": "workspace:*",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jest": "^29.5.13",
+    "@types/node": "^22.7.5",
+    "@types/jsonwebtoken": "^9.0.7",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.6.3"
+  }
+}
