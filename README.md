@@ -87,6 +87,34 @@ curl -s localhost:3000/sources/me -H "Authorization: Bearer <jwt>"
 from step 1 in Telegram, press Start. It idempotently binds your Telegram
 account to the workspace; reopening the link re-confirms without duplicating.
 
+## Bot admin UI (button-driven, no curl needed)
+
+Once your Telegram account is linked, the entire workspace is manageable from
+chat — no commands to memorize, everything is buttons.
+
+**Commands** (also in the `/` menu + menu button): `/start` `/menu`
+`/notifications` `/groups` `/links` `/send` `/help` `/stop`.
+
+**What you can do by tapping:**
+
+- **📝 Notifications** — browse (paginated), **create** (guided name → body),
+  **edit** (name/body with "keep current"), duplicate, archive (with confirm).
+- **👥 Groups** — create, delete (confirm), and **assign subscribers** by
+  tapping ✅/⬜; the implicit **All** group is shown but not editable.
+- **🔗 Invite links** — create (optionally **bound to a group** so joiners are
+  auto-added), view join count, revoke (confirm).
+- **📣 Broadcast** — pick a notification → **multi-select groups** → fill any
+  `{placeholders}` one prompt at a time → send. Delivery needs the worker
+  running; result shows `✅ Queued · N group(s) · M recipient(s)`.
+
+Every screen edits one message in place, has **Back / Cancel**, and shows a
+success/error line after each action. Multi-step input uses grammY
+conversations (cancel at any step). Subscribers only ever see the join
+confirmation and `/stop`.
+
+> The bot layer is pure presentation over the same service methods the REST API
+> uses — no business logic or tenant scoping lives in the handlers.
+
 ## Tests
 
 ```bash

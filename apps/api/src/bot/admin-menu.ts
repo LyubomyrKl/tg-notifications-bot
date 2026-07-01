@@ -178,7 +178,9 @@ export class AdminMenu {
         ? n.placeholders.map((x) => `{${x}}`).join(', ')
         : 'none';
       const kb = new InlineKeyboard()
+        .text('✏️ Edit', `notif:edit:${id}`)
         .text('📋 Duplicate', `notif:dup:${id}`)
+        .row()
         .text('🗑 Archive', `notif:arch:${id}`)
         .row()
         .text('⬅️ Back', 'notif:list');
@@ -188,6 +190,14 @@ export class AdminMenu {
         kb,
         true,
       );
+      return;
+    }
+    if (action === 'edit') {
+      await (
+        ctx as unknown as {
+          conversation: { enter(id: string, ...a: string[]): Promise<void> };
+        }
+      ).conversation.enter('editNotif', id);
       return;
     }
     if (action === 'dup') {
@@ -404,18 +414,34 @@ export class AdminMenu {
       if (l.active) kb.text('🚫 Revoke', `inv:revoke:${id}`);
       kb.text('⬅️ Back', 'inv:list');
       const status = l.active ? '🟢 active' : '🔴 revoked';
+      const bound = l.groupId ? '\n<i>New joiners are auto-added to a group.</i>' : '';
       await this.render(
         ctx,
-        `<b>🔗 Invite link</b> (${status})\n` +
-          `Joins: ${l.joinCount}\n\n<code>${esc(l.url)}</code>`,
+        this.flash(flash) +
+          `<b>🔗 Invite link</b> (${status})\n` +
+          `Joins: ${l.joinCount}${bound}\n\n<code>${esc(l.url)}</code>`,
         kb,
         true,
       );
       return;
     }
     if (action === 'new') {
-      await this.invites.create(p.sourceId, {});
-      await this.inv(ctx, p, 'list', '', '✅ Link created');
+      // Optionally bind the link to a group so joiners are auto-added.
+      const groups = (await this.groups.list(p.sourceId)).filter((g) => !g.isAll);
+      const kb = new InlineKeyboard().text('🔗 No group (anyone)', 'inv:mk').row();
+      groups.forEach((g) => kb.text(`👥 ${g.name}`, `inv:mk:${g.id}`).row());
+      kb.text('⬅️ Back', 'inv:list');
+      await this.render(
+        ctx,
+        '<b>🔗 New invite link</b>\nBind it to a group (joiners auto-added), or pick none:',
+        kb,
+        true,
+      );
+      return;
+    }
+    if (action === 'mk') {
+      const link = await this.invites.create(p.sourceId, id ? { groupId: id } : {});
+      await this.inv(ctx, p, 'view', link.id, '✅ Link created');
       return;
     }
     if (action === 'revoke') {
@@ -580,6 +606,7 @@ export class AdminMenu {
   installConversations(bot: Bot): void {
     bot.use(conversations() as never);
     bot.use(createConversation(this.createNotifConvo as never, 'createNotif') as never);
+    bot.use(createConversation(this.editNotifConvo as never, 'editNotif') as never);
     bot.use(createConversation(this.createGroupConvo as never, 'createGroup') as never);
     bot.use(createConversation(this.bcFillConvo as never, 'bcFill') as never);
   }
@@ -634,6 +661,85 @@ export class AdminMenu {
         ? `\n<i>Placeholders:</i> ${esc(n.placeholders.map((x) => `{${x}}`).join(', '))}`
         : '';
       await ctx.reply(`✅ Created <b>${esc(n.name)}</b>.${ph}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`⚠️ ${esc(humanError(err))}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    }
+  };
+
+  /** Guided edit: name → body, each with a "Keep current" option. */
+  private editNotifConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    notifId: string,
+  ): Promise<void> => {
+    const kb = new InlineKeyboard()
+      .text('↩️ Keep current', 'convo:keep')
+      .text('✖ Cancel', 'convo:cancel');
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    let current: { name: string; body: string };
+    try {
+      current = await conversation.external(() => this.notifications.get(sourceId, notifId));
+    } catch {
+      return void (await ctx.reply('That notification no longer exists.'));
+    }
+
+    await ctx.reply(
+      `✏️ <b>Edit</b> — send a new name, or keep it.\n<i>Current:</i> ${esc(current.name)}`,
+      { parse_mode: 'HTML', reply_markup: kb },
+    );
+    let name = current.name;
+    for (;;) {
+      const u = await conversation.wait();
+      if (u.callbackQuery?.data === 'convo:keep') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        break;
+      }
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = (u.message?.text ?? '').trim();
+      if (!t) {
+        await ctx.reply('Send a name, or ↩️ Keep / ✖ Cancel.', { reply_markup: kb });
+        continue;
+      }
+      name = t;
+      break;
+    }
+
+    await ctx.reply(
+      `✏️ Send a new body, or keep it. Use {placeholders} like {name}.\n<i>Current:</i>\n${esc(current.body)}`,
+      { parse_mode: 'HTML', reply_markup: kb },
+    );
+    let body = current.body;
+    for (;;) {
+      const u = await conversation.wait();
+      if (u.callbackQuery?.data === 'convo:keep') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        break;
+      }
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = u.message?.text;
+      if (!t) {
+        await ctx.reply('Send a body, or ↩️ Keep / ✖ Cancel.', { reply_markup: kb });
+        continue;
+      }
+      body = t;
+      break;
+    }
+
+    try {
+      const n = await conversation.external(() =>
+        this.notifications.update(sourceId, notifId, { name, body }),
+      );
+      const ph = n.placeholders.length
+        ? `\n<i>Placeholders:</i> ${esc(n.placeholders.map((x) => `{${x}}`).join(', '))}`
+        : '';
+      await ctx.reply(`✅ Updated <b>${esc(n.name)}</b>.${ph}`, {
         parse_mode: 'HTML',
         reply_markup: this.homeKeyboard(),
       });
