@@ -178,6 +178,7 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         { command: 'groups', description: 'Subscriber groups' },
         { command: 'links', description: 'Invite links' },
         { command: 'send', description: 'Send a broadcast' },
+        { command: 'scheduled', description: 'Upcoming scheduled sends' },
         { command: 'help', description: 'How this bot works' },
         { command: 'stop', description: 'Unsubscribe' },
       ])

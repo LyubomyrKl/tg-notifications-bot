@@ -202,6 +202,33 @@ export const BroadcastDetail = BroadcastView.extend({
 });
 export type BroadcastDetail = z.infer<typeof BroadcastDetail>;
 
+// ── Scheduled broadcasts ────────────────────────────────────────────────────
+export const RepeatKind = z.enum(['none', 'daily', 'weekly']);
+export type RepeatKind = z.infer<typeof RepeatKind>;
+
+export const ScheduleBroadcastInput = z.object({
+  notificationId: z.string().min(1),
+  groupIds: z.array(z.string().min(1)).min(1),
+  placeholderValues: z.record(z.string()).default({}),
+  // First (or only) fire time, ISO 8601. Interpreted in UTC.
+  sendAt: z.string().datetime(),
+  repeat: RepeatKind.default('none'),
+});
+export type ScheduleBroadcastInput = z.infer<typeof ScheduleBroadcastInput>;
+
+export const ScheduledBroadcastView = z.object({
+  id: z.string(),
+  notificationId: z.string(),
+  groupIds: z.array(z.string()),
+  sendAt: z.string(),
+  repeat: RepeatKind,
+  status: z.enum(['scheduled', 'completed', 'cancelled']),
+  createdBy: z.string(),
+  lastRunAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ScheduledBroadcastView = z.infer<typeof ScheduledBroadcastView>;
+
 // ── Audit log ───────────────────────────────────────────────────────────────
 export const AuditEntryView = z.object({
   id: z.string(),

@@ -16,6 +16,9 @@ export { BroadcastService } from './broadcast/broadcast.service';
 export { BroadcastDeliveryService } from './broadcast/broadcast-delivery.service';
 export type { DeliveryOutcome } from './broadcast/broadcast-delivery.service';
 export { BroadcastConsumer } from './broadcast/broadcast.consumer';
+export { ScheduleModule } from './schedule/schedule.module';
+export { ScheduleService } from './schedule/schedule.service';
+export { ScheduleConsumer } from './schedule/schedule.consumer';
 export { AuditModule } from './audit/audit.module';
 export { AuditService, AuditAction } from './audit/audit.service';
 

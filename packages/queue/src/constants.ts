@@ -18,6 +18,17 @@ export interface BroadcastJobData {
 /** Per-recipient delivery tuning. attempts covers transient + rate-limit retries. */
 export const DELIVERY_ATTEMPTS = 5;
 
+// ── Scheduling ──────────────────────────────────────────────────────────────
+/** Queue of "fire this scheduled broadcast now" triggers (delayed / recurring). */
+export const SCHEDULE_QUEUE = 'broadcast-schedule';
+export const FIRE_JOB = 'fire';
+export type FireJobName = typeof FIRE_JOB;
+
+/** One trigger carries only the scheduled-broadcast id; config is loaded on fire. */
+export interface ScheduleJobData {
+  scheduledId: string;
+}
+
 /**
  * Throughput cap for the worker — stay comfortably under Telegram's ~30 msg/s
  * global limit. (Per-chat limits are handled by 429 backoff, not this.)

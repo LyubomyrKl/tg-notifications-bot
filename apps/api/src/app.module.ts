@@ -10,6 +10,7 @@ import { GroupController } from './http/group.controller';
 import { HealthController } from './http/health.controller';
 import { InviteLinkController } from './http/invite-link.controller';
 import { NotificationController } from './http/notification.controller';
+import { ScheduledBroadcastController } from './http/scheduled-broadcast.controller';
 import { SourceController } from './http/source.controller';
 import { SubscriberController } from './http/subscriber.controller';
 
@@ -24,6 +25,7 @@ import { SubscriberController } from './http/subscriber.controller';
     SubscriberController,
     InviteLinkController,
     BroadcastController,
+    ScheduledBroadcastController,
     AuditController,
   ],
   providers: [AdminGuard, SourceAuthGuard],

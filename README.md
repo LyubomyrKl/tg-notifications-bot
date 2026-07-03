@@ -108,9 +108,13 @@ chat — no commands to memorize, everything is buttons.
   tapping ✅/⬜; the implicit **All** group is shown but not editable.
 - **🔗 Invite links** — create (optionally **bound to a group** so joiners are
   auto-added), view join count, revoke (confirm).
-- **📣 Broadcast** — pick a notification → **multi-select groups** → fill any
-  `{placeholders}` one prompt at a time → send. The result reads
-  `✅ On its way to M people (N groups)`. Delivery runs via the embedded worker.
+- **📣 Broadcast** — pick a notification → **multi-select groups** → **Send now**
+  or **⏰ Schedule** → fill any `{placeholders}` one prompt at a time. Immediate
+  sends read `✅ On its way to M people (N groups)`.
+- **⏰ Scheduled** — schedule a send for later (`+2h`, `+30m`, `+1d`, or a UTC
+  time) with **Once / Daily / Weekly** recurrence; list and cancel upcoming ones.
+  Audience + placeholders are resolved when it fires, so it always reflects the
+  live list. (REST: `/scheduled-broadcasts`.)
 
 Every screen edits one message in place, has **Back / Cancel**, and shows a
 success/error line after each action. Multi-step input uses grammY

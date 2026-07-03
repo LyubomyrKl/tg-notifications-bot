@@ -59,9 +59,42 @@ model Source {
   inviteLinks   InviteLink[]
   broadcasts    Broadcast[]
   auditLogs     AuditLog[]
+  scheduled     ScheduledBroadcast[]
 
   @@index([ownerId])
   @@map("sources")
+}
+
+/// A future (or recurring) broadcast. The recipient set + placeholder render are
+/// resolved when it FIRES, not when it's scheduled — so it always reflects the
+/// live audience. `repeat` = none | daily | weekly; one-time rows complete after
+/// firing, recurring rows keep firing until cancelled. Backed by a BullMQ delayed
+/// job (one-time) or job scheduler (recurring), keyed by this row's id.
+model ScheduledBroadcast {
+  id       String @id @default(cuid())
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id])
+
+  groupIds          String[]
+  placeholderValues Json
+  sendAt            DateTime
+  repeat            String          @default("none")
+  status            ScheduledStatus @default(scheduled)
+  createdBy         String
+  createdAt         DateTime        @default(now())
+  lastRunAt         DateTime?
+
+  @@index([sourceId])
+  @@map("scheduled_broadcasts")
+}
+
+enum ScheduledStatus {
+  scheduled
+  completed
+  cancelled
 }
 
 /// Append-only audit trail of meaningful Source actions (broadcast sent,
@@ -171,6 +204,7 @@ model Notification {
 
   inviteLinks InviteLink[]
   broadcasts  Broadcast[]
+  scheduled   ScheduledBroadcast[]
 
   @@index([sourceId])
   @@map("notifications")

@@ -5,6 +5,7 @@ import {
   GroupService,
   InviteService,
   NotificationService,
+  ScheduleService,
   SourceService,
   SubscriberService,
 } from '@paedavic/core';
@@ -61,6 +62,7 @@ export class AdminMenu {
     private readonly invites: InviteService,
     private readonly broadcasts: BroadcastService,
     private readonly subscribers: SubscriberService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   /** Wire the menu onto the bot. Call after command handlers are registered. */
@@ -71,6 +73,7 @@ export class AdminMenu {
     bot.command('groups', (ctx) => this.openList(ctx, 'grp'));
     bot.command('links', (ctx) => this.openList(ctx, 'inv'));
     bot.command('send', (ctx) => this.openSend(ctx));
+    bot.command('scheduled', (ctx) => this.openScheduled(ctx));
     bot.command('help', (ctx) => this.openHelp(ctx));
     // Callbacks + free-text must come after commands so commands win.
     bot.on('callback_query:data', (ctx) => this.onCallback(ctx));
@@ -91,6 +94,13 @@ export class AdminMenu {
     const p = await this.requireOwner(ctx);
     if (!p) return;
     await this.bc(ctx, p, 'start', '');
+  }
+
+  /** /scheduled → list upcoming scheduled broadcasts. */
+  private async openScheduled(ctx: Context): Promise<void> {
+    const p = await this.requireOwner(ctx);
+    if (!p) return;
+    await this.sch(ctx, p, 'list', '');
   }
 
   /** /help → a short, friendly explainer (works for owners and subscribers). */
@@ -136,6 +146,7 @@ export class AdminMenu {
       if (ns === 'grp') return void (await this.grp(ctx, principal, action, arg));
       if (ns === 'inv') return void (await this.inv(ctx, principal, action, arg));
       if (ns === 'bc') return void (await this.bc(ctx, principal, action, arg));
+      if (ns === 'sch') return void (await this.sch(ctx, principal, action, arg));
     } catch (err) {
       this.logger.error(`menu action "${data}" failed: ${(err as Error).message}`);
       await ctx
@@ -508,22 +519,109 @@ export class AdminMenu {
         await this.renderGroupSelect(ctx, p);
         return;
       }
-      const n = await this.notifications.get(p.sourceId, b.notificationId);
+      const kb = new InlineKeyboard()
+        .text('✅ Send now', 'bc:now')
+        .text('⏰ Schedule', 'bc:sched')
+        .row()
+        .text('✖ Cancel', 'menu:home');
+      await this.render(ctx, '📣 Send now, or schedule for later?', kb, true);
+      return;
+    }
+    if (action === 'now') {
+      const b = session.broadcast!;
+      const n = await this.notifications.get(p.sourceId, b.notificationId!);
       if (n.placeholders.length) {
-        // Hand off to a guided per-placeholder conversation, then it sends.
-        await (
-          ctx as unknown as {
-            conversation: { enter(id: string, ...a: string[]): Promise<void> };
-          }
-        ).conversation.enter('bcFill', b.notificationId, b.groupIds.join(','));
+        await this.enterConvo(ctx, 'bcFill', b.notificationId!, b.groupIds!.join(','));
         return;
       }
       await this.showConfirm(ctx, p);
       return;
     }
+    if (action === 'sched') {
+      const b = session.broadcast;
+      if (!b?.notificationId || !b.groupIds?.length) {
+        await this.renderGroupSelect(ctx, p);
+        return;
+      }
+      await this.enterConvo(ctx, 'scheduleBroadcast', b.notificationId, b.groupIds.join(','));
+      return;
+    }
     if (action === 'send') {
       await this.doSend(ctx, p);
     }
+  }
+
+  /** Enter a grammY conversation (typed loosely; plugin adds ctx.conversation). */
+  private enterConvo(ctx: Context, id: string, ...args: string[]): Promise<void> {
+    return (
+      ctx as unknown as {
+        conversation: { enter(id: string, ...a: string[]): Promise<void> };
+      }
+    ).conversation.enter(id, ...args);
+  }
+
+  // ── Scheduled broadcasts ────────────────────────────────────────────────────
+
+  private async sch(
+    ctx: Context,
+    p: AuthPrincipal,
+    action: string,
+    id: string,
+    flash?: string,
+  ): Promise<void> {
+    if (action === 'list') {
+      const upcoming = (await this.schedule.list(p.sourceId)).filter(
+        (s) => s.status === 'scheduled',
+      );
+      const { slice, pg, pages } = this.paginate(upcoming, parseInt(id || '0', 10) || 0);
+      const kb = new InlineKeyboard();
+      slice.forEach((s) => {
+        const rep = s.repeat === 'none' ? 'once' : s.repeat;
+        kb.text(`⏰ ${this.formatWhen(s.sendAt)} · ${rep}`, `sch:view:${s.id}`).row();
+      });
+      this.navRow(kb, 'sch:list:', pg, pages);
+      kb.text('🏠 Menu', 'menu:home');
+      const header = upcoming.length
+        ? '<b>⏰ Scheduled</b>'
+        : '<b>⏰ Scheduled</b>\n\n📭 Nothing scheduled — send a broadcast and pick “⏰ Schedule”.';
+      await this.render(ctx, this.flash(flash) + header, kb, true);
+      return;
+    }
+    if (action === 'view') {
+      const s = await this.schedule.get(p.sourceId, id);
+      const rep = s.repeat === 'none' ? 'once' : s.repeat;
+      const kb = new InlineKeyboard();
+      if (s.status === 'scheduled') kb.text('🚫 Cancel', `sch:cancel:${id}`).row();
+      kb.text('⬅️ Back', 'sch:list');
+      await this.render(
+        ctx,
+        `<b>⏰ Scheduled broadcast</b>\nWhen: ${this.formatWhen(s.sendAt)} UTC\n` +
+          `Repeat: ${rep}\nStatus: ${s.status}`,
+        kb,
+        true,
+      );
+      return;
+    }
+    if (action === 'cancel') {
+      const kb = new InlineKeyboard()
+        .text('✅ Cancel it', `sch:cancelY:${id}`)
+        .text('✖ Keep', `sch:view:${id}`);
+      await this.render(ctx, '🚫 Cancel this scheduled send?', kb, true);
+      return;
+    }
+    if (action === 'cancelY') {
+      await this.schedule.cancel(p.sourceId, id);
+      await this.sch(ctx, p, 'list', '', '✅ Cancelled');
+      return;
+    }
+  }
+
+  /** Compact UTC label, e.g. "Jul 5 14:30". */
+  private formatWhen(iso: string): string {
+    const d = new Date(iso);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${months[d.getUTCMonth()]} ${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
   }
 
   /** Multi-select group picker for a broadcast (✅/⬜ toggles + Continue). */
@@ -609,6 +707,7 @@ export class AdminMenu {
     bot.use(createConversation(this.editNotifConvo as never, 'editNotif') as never);
     bot.use(createConversation(this.createGroupConvo as never, 'createGroup') as never);
     bot.use(createConversation(this.bcFillConvo as never, 'bcFill') as never);
+    bot.use(createConversation(this.scheduleBroadcastConvo as never, 'scheduleBroadcast') as never);
   }
 
   /** Guided notification authoring: name → body, Cancel at every step. */
@@ -839,6 +938,117 @@ export class AdminMenu {
     }
   };
 
+  /** Guided scheduling: when → repeat → placeholders → schedule. */
+  private scheduleBroadcastConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    notifId: string,
+    groupCsv: string,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    const n = await conversation.external(() => this.notifications.get(sourceId, notifId));
+
+    // 1) When
+    await ctx.reply(
+      '⏰ <b>When?</b>\nReply with <code>+30m</code>, <code>+2h</code>, <code>+1d</code>, ' +
+        'or a UTC time like <code>2026-07-05 14:30</code>.',
+      { parse_mode: 'HTML', reply_markup: cancel },
+    );
+    let sendAt: Date;
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const parsed = this.parseWhen(u.message?.text ?? '');
+      if (!parsed) {
+        await ctx.reply('Couldn’t read that. Try +2h, +30m, +1d, or 2026-07-05 14:30 (UTC).', { reply_markup: cancel });
+        continue;
+      }
+      if (parsed.getTime() <= Date.now()) {
+        await ctx.reply('That time is in the past — pick a future time.', { reply_markup: cancel });
+        continue;
+      }
+      sendAt = parsed;
+      break;
+    }
+
+    // 2) Repeat
+    const repKb = new InlineKeyboard()
+      .text('Once', 'convo:rep:none')
+      .text('Daily', 'convo:rep:daily')
+      .text('Weekly', 'convo:rep:weekly')
+      .row()
+      .text('✖ Cancel', 'convo:cancel');
+    await ctx.reply('🔁 Repeat?', { reply_markup: repKb });
+    let repeat: 'none' | 'daily' | 'weekly' = 'none';
+    for (;;) {
+      const u = await conversation.wait();
+      const d = u.callbackQuery?.data;
+      if (d && d.startsWith('convo:rep:')) {
+        await u.answerCallbackQuery().catch(() => undefined);
+        repeat = d.slice('convo:rep:'.length) as 'none' | 'daily' | 'weekly';
+        break;
+      }
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      await ctx.reply('Tap Once, Daily, or Weekly.', { reply_markup: repKb });
+    }
+
+    // 3) Placeholders (if any)
+    const values: Record<string, string> = {};
+    for (const ph of n.placeholders) {
+      await ctx.reply(`✏️ Value for <b>{${esc(ph)}}</b>:`, { parse_mode: 'HTML', reply_markup: cancel });
+      for (;;) {
+        const u = await conversation.wait();
+        if (this.isCancel(u)) return this.cancelled(ctx, u);
+        const t = u.message?.text;
+        if (t === undefined || t === '') {
+          await ctx.reply('Send a value, or ✖ Cancel.', { reply_markup: cancel });
+          continue;
+        }
+        values[ph] = t;
+        break;
+      }
+    }
+
+    // 4) Create
+    const groupIds = groupCsv.split(',').filter(Boolean);
+    try {
+      const v = await conversation.external(() =>
+        this.schedule.schedule(
+          sourceId,
+          { notificationId: notifId, groupIds, placeholderValues: values, sendAt: sendAt.toISOString(), repeat },
+          `telegram:${ctx.from?.id}`,
+        ),
+      );
+      const rep = repeat === 'none' ? 'once' : repeat;
+      await ctx.reply(`⏰ <b>Scheduled</b> for ${this.formatWhen(v.sendAt)} UTC (${rep}).`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      });
+    } catch (err) {
+      await ctx.reply(`⚠️ ${esc(humanError(err))}`, { parse_mode: 'HTML', reply_markup: this.homeKeyboard() });
+    }
+  };
+
+  /** Parse "+30m" / "+2h" / "+1d" or "YYYY-MM-DD HH:MM" (UTC) → Date, or null. */
+  private parseWhen(text: string): Date | null {
+    const t = text.trim();
+    const rel = t.match(/^\+(\d+)\s*([mhd])$/i);
+    if (rel) {
+      const n = parseInt(rel[1], 10);
+      const unit = rel[2].toLowerCase();
+      const ms = unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000;
+      return new Date(Date.now() + n * ms);
+    }
+    const abs = t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
+    if (abs) {
+      const ms = Date.UTC(+abs[1], +abs[2] - 1, +abs[3], +abs[4], +abs[5]);
+      return Number.isNaN(ms) ? null : new Date(ms);
+    }
+    return null;
+  }
+
   /** Any button tap or command during a conversation cancels it. */
   private isCancel(u: Context): boolean {
     return !!u.callbackQuery || !!u.message?.text?.startsWith('/');
@@ -861,7 +1071,9 @@ export class AdminMenu {
       .text('👥 Groups', 'grp:list')
       .row()
       .text('🔗 Invite links', 'inv:list')
-      .text('📣 Broadcast', 'bc:start');
+      .text('📣 Broadcast', 'bc:start')
+      .row()
+      .text('⏰ Scheduled', 'sch:list');
   }
 
   private sentSummary(recipients: number, groupCount: number): string {
