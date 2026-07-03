@@ -1,10 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  type OnApplicationBootstrap,
-  type OnModuleDestroy,
-} from '@nestjs/common';
-import { BroadcastDeliveryService } from '@paedavic/core';
+import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import {
   BROADCAST_QUEUE,
   type BroadcastJobData,
@@ -13,27 +7,28 @@ import {
   createRedisConnection,
   deliveryBackoff,
 } from '@paedavic/queue';
-import { type Job, Worker } from 'bullmq';
+import { Worker } from 'bullmq';
+import { BroadcastDeliveryService } from './broadcast-delivery.service';
 
 /**
- * Thin BullMQ adapter: consume delivery jobs and hand each to the shared
- * BroadcastDeliveryService. Rate limiting (global throughput) and backoff
- * (per-job, 429-aware) are configured here; all delivery semantics live in the
- * service layer. When a job exhausts its retries, record the terminal failure.
+ * BullMQ consumer for the delivery queue. Lives in core so it can run either in
+ * a dedicated worker process OR embedded in the API process (single-process
+ * mode) — the app decides by calling {@link start}. Rate limiting + 429-aware
+ * backoff are configured here; all delivery semantics live in the service layer.
  */
 @Injectable()
-export class BroadcastConsumer
-  implements OnApplicationBootstrap, OnModuleDestroy
-{
+export class BroadcastConsumer implements OnModuleDestroy {
   private readonly logger = new Logger(BroadcastConsumer.name);
   private worker?: Worker<BroadcastJobData>;
 
   constructor(private readonly delivery: BroadcastDeliveryService) {}
 
-  onApplicationBootstrap(): void {
+  /** Begin consuming the delivery queue. Idempotent — safe to call once. */
+  start(): void {
+    if (this.worker) return;
     this.worker = new Worker<BroadcastJobData>(
       BROADCAST_QUEUE,
-      async (job) =>
+      (job) =>
         this.delivery.processRecipient(job.data.broadcastId, job.data.recipientId),
       {
         connection: createRedisConnection(),
@@ -59,9 +54,7 @@ export class BroadcastConsumer
       }
     });
 
-    this.logger.log(
-      `Broadcast delivery worker listening on "${BROADCAST_QUEUE}"`,
-    );
+    this.logger.log(`Broadcast delivery worker listening on "${BROADCAST_QUEUE}"`);
   }
 
   async onModuleDestroy(): Promise<void> {

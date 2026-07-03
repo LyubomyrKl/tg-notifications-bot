@@ -36,6 +36,8 @@ services:
     environment:
       DATABASE_URL: postgresql://paedavic:paedavic@postgres:5432/paedavic?schema=public
       REDIS_URL: redis://redis:6379
+      # A dedicated worker service runs below, so the API doesn't embed one.
+      EMBED_WORKER: "false"
     ports:
       - "3000:3000"
     depends_on:

@@ -54,10 +54,15 @@ docker compose up -d postgres redis
 pnpm db:generate                # generate Prisma client
 pnpm --filter @paedavic/database migrate   # apply migrations (dev)
 pnpm build
-pnpm --filter @paedavic/api dev # or: pnpm --filter @paedavic/worker dev
+pnpm --filter @paedavic/api dev # embeds the delivery worker (EMBED_WORKER=true)
 ```
 
-Full stack in containers: `docker compose up --build`.
+The API runs the BullMQ delivery worker **in-process by default** (`EMBED_WORKER=true`),
+so a single command delivers broadcasts too. For horizontal scaling, set
+`EMBED_WORKER=false` and run `pnpm --filter @paedavic/worker dev` separately.
+
+Full stack in containers: `docker compose up --build` (compose runs a dedicated
+worker, so the API there uses `EMBED_WORKER=false`).
 
 ## Exercise Slice 1
 
@@ -104,8 +109,8 @@ chat — no commands to memorize, everything is buttons.
 - **🔗 Invite links** — create (optionally **bound to a group** so joiners are
   auto-added), view join count, revoke (confirm).
 - **📣 Broadcast** — pick a notification → **multi-select groups** → fill any
-  `{placeholders}` one prompt at a time → send. Delivery needs the worker
-  running; result shows `✅ Queued · N group(s) · M recipient(s)`.
+  `{placeholders}` one prompt at a time → send. The result reads
+  `✅ On its way to M people (N groups)`. Delivery runs via the embedded worker.
 
 Every screen edits one message in place, has **Back / Cancel**, and shows a
 success/error line after each action. Multi-step input uses grammY

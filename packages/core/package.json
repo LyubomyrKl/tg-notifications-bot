@@ -17,6 +17,7 @@
     "@paedavic/queue": "workspace:*",
     "@paedavic/telegram": "workspace:*",
     "bcryptjs": "^2.4.3",
+    "bullmq": "^5.34.0",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {

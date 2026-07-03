@@ -865,10 +865,12 @@ export class AdminMenu {
   }
 
   private sentSummary(recipients: number, groupCount: number): string {
-    return (
-      `✅ <b>Queued</b> · ${groupCount} group(s) · ${recipients} recipient(s).\n` +
-      'Delivery runs in the background.'
-    );
+    if (recipients === 0) {
+      return '📭 No one to send to — those groups have no active subscribers yet.';
+    }
+    const people = recipients === 1 ? '1 person' : `${recipients} people`;
+    const groups = groupCount === 1 ? '1 group' : `${groupCount} groups`;
+    return `✅ <b>On its way</b> to ${people} (${groups}).`;
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────

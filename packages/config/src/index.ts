@@ -14,6 +14,14 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REDIS_URL: z.string().min(1, 'REDIS_URL is required'),
 
+  // Run the BullMQ delivery worker inside the API process (single-process mode,
+  // ideal for small/single-instance deployments). Set false when running a
+  // dedicated worker for horizontal scaling. Coerced so "false"/"0" ⇒ false.
+  EMBED_WORKER: z.preprocess(
+    (v) => (v === undefined ? true : ['true', '1', 'yes'].includes(String(v).toLowerCase())),
+    z.boolean(),
+  ),
+
   ADMIN_API_KEY: z.string().min(1, 'ADMIN_API_KEY is required'),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   JWT_EXPIRES_IN: z.string().default('7d'),
