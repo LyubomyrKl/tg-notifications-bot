@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CoreModule } from '@paedavic/core';
-import { AdminGuard } from './auth/admin.guard';
 import { SourceAuthGuard } from './auth/source-auth.guard';
+import { SuperAdminGuard } from './auth/super-admin.guard';
 import { BotModule } from './bot/bot.module';
 import { AuditController } from './http/audit.controller';
 import { AuthController } from './http/auth.controller';
@@ -28,6 +28,6 @@ import { SubscriberController } from './http/subscriber.controller';
     ScheduledBroadcastController,
     AuditController,
   ],
-  providers: [AdminGuard, SourceAuthGuard],
+  providers: [SuperAdminGuard, SourceAuthGuard],
 })
 export class AppModule {}

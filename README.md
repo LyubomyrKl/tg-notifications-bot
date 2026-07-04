@@ -66,14 +66,14 @@ worker, so the API there uses `EMBED_WORKER=false`).
 
 ## Exercise Slice 1
 
-Provisioning is admin-guarded; everything else uses the issued credential.
+Provisioning is super-admin-guarded; everything else uses the issued credential.
 
 ```bash
-ADMIN=dev-admin-key-change-me
+SUPERADMIN=dev-superadmin-key-change-me
 
 # 1) Provision a workspace (returns apiKey + start link, key shown once)
 curl -s -X POST localhost:3000/sources \
-  -H "x-admin-key: $ADMIN" -H 'content-type: application/json' \
+  -H "x-superadmin-key: $SUPERADMIN" -H 'content-type: application/json' \
   -d '{"ownerEmail":"a@ex.com","ownerPassword":"password123","name":"Acme"}'
 
 # 2) Read your workspace with the API key

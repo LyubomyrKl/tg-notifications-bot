@@ -22,7 +22,9 @@ const EnvSchema = z.object({
     z.boolean(),
   ),
 
-  ADMIN_API_KEY: z.string().min(1, 'ADMIN_API_KEY is required'),
+  // Platform-operator (super-admin) key that guards the workspace-provisioning
+  // bootstrap. NOT a per-workspace admin role — that's a future concept.
+  SUPERADMIN_API_KEY: z.string().min(1, 'SUPERADMIN_API_KEY is required'),
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   JWT_EXPIRES_IN: z.string().default('7d'),
 
@@ -50,9 +52,4 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   cached = parsed.data;
   return cached;
-}
-
-/** Test helper — drop the memoized config so a new env can be parsed. */
-export function resetConfigCache(): void {
-  cached = null;
 }

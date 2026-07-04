@@ -11,8 +11,8 @@ import {
   type SourceView,
 } from '@paedavic/contracts';
 import { type AuthPrincipal, SourceService } from '@paedavic/core';
-import { AdminGuard } from '../auth/admin.guard';
 import { SourceAuthGuard } from '../auth/source-auth.guard';
+import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
@@ -20,9 +20,9 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 export class SourceController {
   constructor(private readonly sources: SourceService) {}
 
-  /** Admin bootstrap — provisions a workspace, returns API key + start link. */
+  /** Super-admin bootstrap — provisions a workspace, returns API key + start link. */
   @Post()
-  @UseGuards(AdminGuard)
+  @UseGuards(SuperAdminGuard)
   provision(
     @Body(new ZodValidationPipe(CreateSourceInput)) body: CreateSourceInput,
   ): Promise<SourceCredentials> {
