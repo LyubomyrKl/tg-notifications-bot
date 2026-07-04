@@ -8,11 +8,11 @@ import {
 } from '@nestjs/common';
 import { type SubscriberView } from '@paedavic/contracts';
 import { type AuthPrincipal, SubscriberService } from '@paedavic/core';
-import { SourceAuthGuard } from '../auth/source-auth.guard';
+import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 
 @Controller('subscribers')
-@UseGuards(SourceAuthGuard)
+@UseGuards(BearerAuthGuard)
 export class SubscriberController {
   constructor(private readonly subscribers: SubscriberService) {}
 

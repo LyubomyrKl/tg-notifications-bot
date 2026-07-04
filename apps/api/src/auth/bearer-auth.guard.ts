@@ -7,15 +7,18 @@ import {
 import { SourceService, TokenService } from '@paedavic/core';
 
 /**
- * Resolves the caller into a tenant-scoped principal from a `Bearer` token:
- *  - `pk_…`  → API key  → SourceService.resolveByApiKey
- *  - else    → JWT      → TokenService.verify → resolveByUserId
+ * The REST API's authentication guard. It accepts EITHER credential the API
+ * supports, both sent as `Authorization: Bearer <token>`, and resolves the
+ * caller to a tenant-scoped principal:
+ *   - `pk_…`  → programmatic API key → SourceService.resolveByApiKey
+ *   - else    → web-login JWT        → TokenService.verify → resolveByUserId
  *
- * Either way `request.principal.sourceId` is set, so controllers and the
- * service layer scope identically regardless of which client called.
+ * Either way `request.principal.sourceId` is set, so controllers + the service
+ * layer scope identically no matter which credential was used. (The Telegram
+ * bot authenticates separately, by chat id — it never passes through here.)
  */
 @Injectable()
-export class SourceAuthGuard implements CanActivate {
+export class BearerAuthGuard implements CanActivate {
   constructor(
     private readonly sources: SourceService,
     private readonly tokens: TokenService,

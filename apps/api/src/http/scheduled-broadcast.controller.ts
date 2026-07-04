@@ -11,12 +11,12 @@ import {
   type ScheduledBroadcastView,
 } from '@paedavic/contracts';
 import { type AuthPrincipal, ScheduleService } from '@paedavic/core';
-import { SourceAuthGuard } from '../auth/source-auth.guard';
+import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 @Controller('scheduled-broadcasts')
-@UseGuards(SourceAuthGuard)
+@UseGuards(BearerAuthGuard)
 export class ScheduledBroadcastController {
   constructor(private readonly schedule: ScheduleService) {}
 

@@ -15,13 +15,13 @@ import {
   UpdateNotificationInput,
 } from '@paedavic/contracts';
 import { type AuthPrincipal, NotificationService } from '@paedavic/core';
-import { SourceAuthGuard } from '../auth/source-auth.guard';
+import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 /** Notification gallery. All routes tenant-scoped via the resolved principal. */
 @Controller('notifications')
-@UseGuards(SourceAuthGuard)
+@UseGuards(BearerAuthGuard)
 export class NotificationController {
   constructor(private readonly notifications: NotificationService) {}
 

@@ -11,7 +11,7 @@ import {
   type SourceView,
 } from '@paedavic/contracts';
 import { type AuthPrincipal, SourceService } from '@paedavic/core';
-import { SourceAuthGuard } from '../auth/source-auth.guard';
+import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { SuperAdminGuard } from '../auth/super-admin.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
@@ -31,7 +31,7 @@ export class SourceController {
 
   /** Current workspace profile (incl. Telegram-link status + start link). */
   @Get('me')
-  @UseGuards(SourceAuthGuard)
+  @UseGuards(BearerAuthGuard)
   me(@CurrentPrincipal() principal: AuthPrincipal): Promise<SourceView> {
     return this.sources.getView(principal.sourceId);
   }

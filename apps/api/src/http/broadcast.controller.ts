@@ -12,12 +12,12 @@ import {
   CreateBroadcastInput,
 } from '@paedavic/contracts';
 import { type AuthPrincipal, BroadcastService } from '@paedavic/core';
-import { SourceAuthGuard } from '../auth/source-auth.guard';
+import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 @Controller('broadcasts')
-@UseGuards(SourceAuthGuard)
+@UseGuards(BearerAuthGuard)
 export class BroadcastController {
   constructor(private readonly broadcasts: BroadcastService) {}
 
