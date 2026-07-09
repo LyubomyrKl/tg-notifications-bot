@@ -15,7 +15,7 @@ import {
   ScheduledStatus,
 } from '@paedavic/database';
 import { ScheduleQueue } from '@paedavic/queue';
-import { renderTemplate } from '../notification/placeholder.util';
+import { resolveSendTargets } from '../broadcast/send-validation';
 
 /**
  * Schedule broadcasts for later (one-time) or on a cadence (daily/weekly). The
@@ -34,20 +34,12 @@ export class ScheduleService {
     input: ScheduleBroadcastInput,
     createdBy: string,
   ): Promise<ScheduledBroadcastView> {
-    const notification = await this.prisma.notification.findFirst({
-      where: { id: input.notificationId, sourceId, archivedAt: null },
-    });
-    if (!notification) throw new NotFoundException('Notification not found');
-    // Fail fast if placeholders can't be satisfied — no surprise failure later.
-    renderTemplate(notification.body, input.placeholderValues);
-
-    const groupIds = [...new Set(input.groupIds)];
-    const groups = await this.prisma.group.findMany({
-      where: { id: { in: groupIds }, sourceId },
-    });
-    if (groups.length !== groupIds.length) {
-      throw new NotFoundException('One or more target groups not found');
-    }
+    // Validate template + placeholders + target groups (tenant-scoped).
+    const { notification, groupIds } = await resolveSendTargets(
+      this.prisma,
+      sourceId,
+      input,
+    );
 
     const sendAt = new Date(input.sendAt);
     if (Number.isNaN(sendAt.getTime())) {

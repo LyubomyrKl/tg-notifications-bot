@@ -13,7 +13,7 @@ import {
 } from '@paedavic/database';
 import { BroadcastQueue } from '@paedavic/queue';
 import { AuditAction, AuditService } from '../audit/audit.service';
-import { renderTemplate } from '../notification/placeholder.util';
+import { resolveSendTargets } from './send-validation';
 
 type BroadcastWithTargets = Broadcast & {
   targets: { groupId: string }[];
@@ -49,21 +49,12 @@ export class BroadcastService {
     });
     if (existing) return this.toView(existing);
 
-    // Template must belong to this source and have every placeholder filled.
-    const notification = await this.prisma.notification.findFirst({
-      where: { id: input.notificationId, sourceId, archivedAt: null },
-    });
-    if (!notification) throw new NotFoundException('Notification not found');
-    renderTemplate(notification.body, input.placeholderValues); // throws if unfilled
-
-    // Target groups must all belong to this source.
-    const groupIds = [...new Set(input.groupIds)];
-    const groups = await this.prisma.group.findMany({
-      where: { id: { in: groupIds }, sourceId },
-    });
-    if (groups.length !== groupIds.length) {
-      throw new NotFoundException('One or more target groups not found');
-    }
+    // Validate template + placeholders + target groups (tenant-scoped).
+    const { notification, groups, groupIds } = await resolveSendTargets(
+      this.prisma,
+      sourceId,
+      input,
+    );
 
     // Resolve recipients NOW: active subscribers in the targeted groups (or all
     // active subscribers if the implicit All group is among the targets).

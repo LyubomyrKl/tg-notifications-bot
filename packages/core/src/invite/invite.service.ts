@@ -42,8 +42,9 @@ export class InviteService {
   ) {}
 
   static readonly TOKEN_PREFIX = TOKEN_PREFIX;
+
   static isInviteToken(token: string): boolean {
-    return token.startsWith(TOKEN_PREFIX);
+    return token.startsWith(this.TOKEN_PREFIX);
   }
 
   async create(
