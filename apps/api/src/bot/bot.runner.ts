@@ -184,10 +184,19 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       .catch(() => undefined);
 
     // grammY long-polls in the background; do not await (resolves on stop).
-    void this.telegram.bot.start({
-      onStart: (info) =>
-        this.logger.log(`Bot @${info.username} started (long-polling)`),
-    });
+    // Catch startup failures (e.g. a bad TELEGRAM_BOT_TOKEN → 401) so they log
+    // an error instead of crashing the whole process (which would crash-loop the
+    // container). The REST API stays up regardless.
+    this.telegram.bot
+      .start({
+        onStart: (info) =>
+          this.logger.log(`Bot @${info.username} started (long-polling)`),
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Bot failed to start — check TELEGRAM_BOT_TOKEN. ${(err as Error).message}`,
+        ),
+      );
   }
 
   async onModuleDestroy(): Promise<void> {
