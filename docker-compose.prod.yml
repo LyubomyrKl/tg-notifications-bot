@@ -1,0 +1,54 @@
+# Production stack for a single Hetzner box.
+# - Postgres/Redis are NOT exposed to the internet (internal Docker network only).
+# - API runs the delivery + schedule workers in-process (EMBED_WORKER=true) → one app.
+# - Bot in polling mode → no inbound port needed; API port is bound to localhost only.
+# Secrets come from .env (see .env.prod.example). Bring up with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: paedavic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: paedavic
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paedavic"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      API_PORT: "3000"
+      DATABASE_URL: postgresql://paedavic:${POSTGRES_PASSWORD}@postgres:5432/paedavic?schema=public
+      REDIS_URL: redis://redis:6379
+      EMBED_WORKER: "true" # single-process: API also runs delivery + schedule workers
+      TELEGRAM_MODE: polling # outbound-only; no inbound port required
+    ports:
+      - "127.0.0.1:3000:3000" # reachable ON the box (curl localhost:3000), not from the internet
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
