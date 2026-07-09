@@ -7,7 +7,6 @@
  * in here later without touching the menu code.
  */
 export interface BotSession {
-  /** In-progress broadcast composition (notification + multi-group select). */
   broadcast?: {
     notificationId?: string;
     groupIds?: string[];

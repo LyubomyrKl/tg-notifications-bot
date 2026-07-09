@@ -16,6 +16,9 @@ import {
 } from '@nestjs/common';
 import { conversations, createConversation } from '@grammyjs/conversations';
 import { type Bot, type Context, InlineKeyboard } from 'grammy';
+
+/** Shape Telegram's setMyCommands expects. */
+type BotCommand = { command: string; description: string };
 import { clearSession, getSession } from './session';
 
 /** grammY conversations replay their builder; service calls are wrapped in
@@ -65,16 +68,35 @@ export class AdminMenu {
     private readonly schedule: ScheduleService,
   ) {}
 
+  /**
+   * Single source of truth for this menu's commands: name + Telegram-menu
+   * description + handler. Drives BOTH the `bot.command(...)` wiring (below) and
+   * the `setMyCommands` list (via {@link menuCommands}) — so the two can't drift.
+   * (`/start` and `/stop` are owned by BotRunner and added around these.)
+   */
+  private readonly menuCommandDefs: ReadonlyArray<{
+    command: string;
+    description: string;
+    run: (ctx: Context) => Promise<void>;
+  }> = [
+    { command: 'menu', description: 'Open the main menu', run: (c) => this.openHome(c, false) },
+    { command: 'notifications', description: 'Message templates', run: (c) => this.openList(c, 'notif') },
+    { command: 'groups', description: 'Subscriber groups', run: (c) => this.openList(c, 'grp') },
+    { command: 'links', description: 'Invite links', run: (c) => this.openList(c, 'inv') },
+    { command: 'send', description: 'Send a broadcast', run: (c) => this.openSend(c) },
+    { command: 'scheduled', description: 'Upcoming scheduled sends', run: (c) => this.openScheduled(c) },
+    { command: 'help', description: 'How this bot works', run: (c) => this.openHelp(c) },
+  ];
+
+  /** The {command, description} list for Telegram's command menu (setMyCommands). */
+  menuCommands(): BotCommand[] {
+    return this.menuCommandDefs.map(({ command, description }) => ({ command, description }));
+  }
+
   /** Wire the menu onto the bot. Call after command handlers are registered. */
   register(bot: Bot): void {
-    // Command shortcuts that jump straight to a menu screen (same renderers).
-    bot.command('menu', (ctx) => this.openHome(ctx, false));
-    bot.command('notifications', (ctx) => this.openList(ctx, 'notif'));
-    bot.command('groups', (ctx) => this.openList(ctx, 'grp'));
-    bot.command('links', (ctx) => this.openList(ctx, 'inv'));
-    bot.command('send', (ctx) => this.openSend(ctx));
-    bot.command('scheduled', (ctx) => this.openScheduled(ctx));
-    bot.command('help', (ctx) => this.openHelp(ctx));
+    // Command shortcuts that jump straight to a menu screen — from the registry.
+    for (const c of this.menuCommandDefs) bot.command(c.command, (ctx) => c.run(ctx));
     // Callbacks + free-text must come after commands so commands win.
     bot.on('callback_query:data', (ctx) => this.onCallback(ctx));
     bot.on('message:text', (ctx) => this.onText(ctx));

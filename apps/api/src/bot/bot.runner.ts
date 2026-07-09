@@ -170,16 +170,12 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       );
     }
     // Show suggested commands in the Telegram UI (the "/" menu) + the menu button.
+    // start/stop are owned here; the middle comes from the menu's single source
+    // of truth so the "/" list can never drift from the registered handlers.
     void this.telegram.bot.api
       .setMyCommands([
         { command: 'start', description: 'Connect or open your workspace' },
-        { command: 'menu', description: 'Open the main menu' },
-        { command: 'notifications', description: 'Message templates' },
-        { command: 'groups', description: 'Subscriber groups' },
-        { command: 'links', description: 'Invite links' },
-        { command: 'send', description: 'Send a broadcast' },
-        { command: 'scheduled', description: 'Upcoming scheduled sends' },
-        { command: 'help', description: 'How this bot works' },
+        ...this.adminMenu.menuCommands(),
         { command: 'stop', description: 'Unsubscribe' },
       ])
       .catch(() => undefined);

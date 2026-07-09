@@ -1,11 +1,7 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-} from '@nestjs/common';
-import { loadConfig } from '@paedavic/config';
-import { Bot } from 'grammy';
-import { classifySendError, TelegramSendError } from './send-error';
+import {Injectable, OnModuleDestroy,} from '@nestjs/common';
+import {loadConfig} from '@paedavic/config';
+import {Bot} from 'grammy';
+import {classifySendError, TelegramSendError} from './send-error';
 
 export interface SendTextOptions {
   parseMode?: 'HTML' | 'MarkdownV2';
@@ -22,7 +18,6 @@ export interface SendTextOptions {
  */
 @Injectable()
 export class TelegramService implements OnModuleDestroy {
-  private readonly logger = new Logger(TelegramService.name);
   private readonly _bot: Bot | null;
   readonly username: string;
 
@@ -70,8 +65,7 @@ export class TelegramService implements OnModuleDestroy {
         parse_mode: opts.parseMode,
       });
     } catch (err) {
-      const classified = classifySendError(err);
-      throw classified;
+        throw classifySendError(err);
     }
   }
 
