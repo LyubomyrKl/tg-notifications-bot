@@ -56,19 +56,15 @@ export class BroadcastService {
       input,
     );
 
-    // Resolve recipients NOW: active subscribers in the targeted groups (or all
-    // active subscribers if the implicit All group is among the targets).
-    const includesAll = groups.some((g) => g.isAll);
-    const subscribers = await this.prisma.subscriber.findMany({
-      where: {
-        sourceId,
-        status: SubscriberStatus.active,
-        ...(includesAll
-          ? {}
-          : { memberships: { some: { groupId: { in: groupIds } } } }),
-      },
-      select: { id: true },
-    });
+    // Resolve recipients NOW (active only): union of the targeted groups' members
+    // and any directly-targeted subscribers, deduped.
+    const recipientIds = await this.resolveRecipientIds(
+      sourceId,
+      groups,
+      groupIds,
+      input.subscriberIds,
+    );
+    const subscribers = recipientIds.map((id) => ({ id }));
 
     let broadcast: BroadcastWithTargets;
     try {
@@ -150,6 +146,53 @@ export class BroadcastService {
         sentAt: r.sentAt?.toISOString() ?? null,
       })),
     };
+  }
+
+  /**
+   * The deduped set of active subscriber ids to deliver to: everyone in the
+   * targeted groups, plus any explicitly-targeted subscribers. Direct ids are
+   * validated to belong to this Source (unknown id → 404); unsubscribed ones are
+   * silently dropped (consent), so a 1:1 send to someone who left simply reaches
+   * no one rather than erroring.
+   */
+  private async resolveRecipientIds(
+    sourceId: string,
+    groups: { isAll: boolean }[],
+    groupIds: string[],
+    subscriberIds: string[],
+  ): Promise<string[]> {
+    const ids = new Set<string>();
+
+    if (groupIds.length > 0) {
+      const includesAll = groups.some((g) => g.isAll);
+      const rows = await this.prisma.subscriber.findMany({
+        where: {
+          sourceId,
+          status: SubscriberStatus.active,
+          ...(includesAll
+            ? {}
+            : { memberships: { some: { groupId: { in: groupIds } } } }),
+        },
+        select: { id: true },
+      });
+      rows.forEach((r) => ids.add(r.id));
+    }
+
+    const wanted = [...new Set(subscriberIds)];
+    if (wanted.length > 0) {
+      const owned = await this.prisma.subscriber.findMany({
+        where: { sourceId, id: { in: wanted } },
+        select: { id: true, status: true },
+      });
+      if (owned.length !== wanted.length) {
+        throw new NotFoundException('One or more subscribers not found');
+      }
+      owned
+        .filter((s) => s.status === SubscriberStatus.active)
+        .forEach((s) => ids.add(s.id));
+    }
+
+    return [...ids];
   }
 
   private toView(b: BroadcastWithTargets): BroadcastView {

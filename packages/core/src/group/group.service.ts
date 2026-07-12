@@ -128,6 +128,35 @@ export class GroupService {
     return this.toView(group, await this.memberCount(group));
   }
 
+  /**
+   * Reassign a subscriber to `toGroupId`: remove them from every other (non-All)
+   * group in this Source and add them to the target. A clean "move" — after this
+   * the subscriber's only named group is the target. Tenant-scoped + atomic.
+   */
+  async moveMember(
+    sourceId: string,
+    subscriberId: string,
+    toGroupId: string,
+  ): Promise<GroupView> {
+    const target = await this.findOwned(sourceId, toGroupId);
+    this.assertMutable(target, 'move members into');
+    const subscriber = await this.prisma.subscriber.findFirst({
+      where: { id: subscriberId, sourceId },
+    });
+    if (!subscriber) throw new NotFoundException('Subscriber not found');
+
+    await this.prisma.$transaction([
+      // Drop from all named groups in this Source (target included — re-added next).
+      this.prisma.groupMember.deleteMany({
+        where: { subscriberId, group: { sourceId, isAll: false } },
+      }),
+      this.prisma.groupMember.create({
+        data: { groupId: toGroupId, subscriberId },
+      }),
+    ]);
+    return this.toView(target, await this.memberCount(target));
+  }
+
   async members(sourceId: string, groupId: string): Promise<SubscriberView[]> {
     const group = await this.findOwned(sourceId, groupId);
     if (group.isAll) {

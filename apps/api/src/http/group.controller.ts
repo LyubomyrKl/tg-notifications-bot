@@ -83,4 +83,14 @@ export class GroupController {
   ): Promise<GroupView> {
     return this.groups.removeMember(p.sourceId, id, subscriberId);
   }
+
+  /** Reassign a subscriber into this group (removes them from their others). */
+  @Post(':id/reassign/:subscriberId')
+  reassign(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('id') id: string,
+    @Param('subscriberId') subscriberId: string,
+  ): Promise<GroupView> {
+    return this.groups.moveMember(p.sourceId, subscriberId, id);
+  }
 }

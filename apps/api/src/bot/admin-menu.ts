@@ -84,6 +84,7 @@ export class AdminMenu {
     { command: 'groups', description: 'Subscriber groups', run: (c) => this.openList(c, 'grp') },
     { command: 'links', description: 'Invite links', run: (c) => this.openList(c, 'inv') },
     { command: 'send', description: 'Send a broadcast', run: (c) => this.openSend(c) },
+    { command: 'subscribers', description: 'Subscribers', run: (c) => this.openSubscribers(c) },
     { command: 'scheduled', description: 'Upcoming scheduled sends', run: (c) => this.openScheduled(c) },
     { command: 'help', description: 'How this bot works', run: (c) => this.openHelp(c) },
   ];
@@ -116,6 +117,13 @@ export class AdminMenu {
     const p = await this.requireOwner(ctx);
     if (!p) return;
     await this.bc(ctx, p, 'start', '');
+  }
+
+  /** /subscribers → list subscribers. */
+  private async openSubscribers(ctx: Context): Promise<void> {
+    const p = await this.requireOwner(ctx);
+    if (!p) return;
+    await this.sub(ctx, p, 'list', '');
   }
 
   /** /scheduled → list upcoming scheduled broadcasts. */
@@ -169,6 +177,7 @@ export class AdminMenu {
       if (ns === 'inv') return void (await this.inv(ctx, principal, action, arg));
       if (ns === 'bc') return void (await this.bc(ctx, principal, action, arg));
       if (ns === 'sch') return void (await this.sch(ctx, principal, action, arg));
+      if (ns === 'sub') return void (await this.sub(ctx, principal, action, arg));
     } catch (err) {
       this.logger.error(`menu action "${data}" failed: ${(err as Error).message}`);
       await ctx
@@ -553,7 +562,7 @@ export class AdminMenu {
       const b = session.broadcast!;
       const n = await this.notifications.get(p.sourceId, b.notificationId!);
       if (n.placeholders.length) {
-        await this.enterConvo(ctx, 'bcFill', b.notificationId!, b.groupIds!.join(','));
+        await this.enterConvo(ctx, 'bcFill', b.notificationId!, b.groupIds!.join(','), '');
         return;
       }
       await this.showConfirm(ctx, p);
@@ -638,6 +647,147 @@ export class AdminMenu {
     }
   }
 
+  // ── Subscribers ─────────────────────────────────────────────────────────────
+
+  /**
+   * Per-subscriber management: browse the roster, then send a one-off message,
+   * reassign to a group (a clean move), or unsubscribe. The direct-send flow
+   * reuses the broadcast machinery with a single subscriberId (no group).
+   */
+  private async sub(
+    ctx: Context,
+    p: AuthPrincipal,
+    action: string,
+    arg: string,
+    flash?: string,
+  ): Promise<void> {
+    const session = getSession(ctx.from!.id);
+
+    if (action === 'list') {
+      const all = await this.subscribers.list(p.sourceId);
+      const { slice, pg, pages } = this.paginate(all, parseInt(arg || '0', 10) || 0);
+      const kb = new InlineKeyboard();
+      slice.forEach((s) => {
+        const label = s.username ? `@${s.username}` : s.telegramUserId;
+        kb.text(`👤 ${label}`, `sub:view:${s.id}`).row();
+      });
+      this.navRow(kb, 'sub:list:', pg, pages);
+      kb.text('🏠 Menu', 'menu:home');
+      const header = all.length
+        ? '<b>👤 Subscribers</b>\nTap someone to message or manage them.'
+        : '<b>👤 Subscribers</b>\n\n📭 None yet — share an invite link first.';
+      await this.render(ctx, this.flash(flash) + header, kb, true);
+      return;
+    }
+
+    if (action === 'view') {
+      const s = (await this.subscribers.list(p.sourceId)).find((x) => x.id === arg);
+      if (!s) return void (await this.sub(ctx, p, 'list', '', '⚠️ Subscriber not found'));
+      const label = s.username ? `@${s.username}` : s.telegramUserId;
+      const kb = new InlineKeyboard()
+        .text('📨 Send message', `sub:send:${s.id}`)
+        .row()
+        .text('➿ Move to group', `sub:move:${s.id}`)
+        .row()
+        .text('🚫 Unsubscribe', `sub:unsub:${s.id}`)
+        .row()
+        .text('⬅️ Back', 'sub:list');
+      await this.render(
+        ctx,
+        this.flash(flash) +
+          `<b>👤 ${esc(label)}</b>\n<code>${s.telegramUserId}</code>\n` +
+          `Status: ${s.status} · joined ${this.formatWhen(s.joinedAt)} UTC`,
+        kb,
+        true,
+      );
+      return;
+    }
+
+    if (action === 'send') {
+      // Fresh single-recipient broadcast: pick which notification to send.
+      session.broadcast = { subscriberIds: [arg], groupIds: [] };
+      const items = await this.notifications.list(p.sourceId);
+      const kb = new InlineKeyboard();
+      items.forEach((n) => kb.text(`📝 ${n.name}`, `sub:pick:${arg}:${n.id}`).row());
+      kb.text('⬅️ Back', `sub:view:${arg}`);
+      await this.render(
+        ctx,
+        items.length
+          ? '<b>📨 Send message</b>\nPick a notification to send:'
+          : '<b>📨 Send message</b>\n\n📭 Create a notification first.',
+        kb,
+        true,
+      );
+      return;
+    }
+
+    if (action === 'pick') {
+      // arg is "subscriberId:notificationId".
+      const sep = arg.lastIndexOf(':');
+      const subId = arg.slice(0, sep);
+      const notifId = arg.slice(sep + 1);
+      session.broadcast = {
+        notificationId: notifId,
+        groupIds: [],
+        subscriberIds: [subId],
+      };
+      const n = await this.notifications.get(p.sourceId, notifId);
+      if (n.placeholders.length) {
+        await this.enterConvo(ctx, 'bcFill', notifId, '', subId);
+        return;
+      }
+      await this.doSend(ctx, p);
+      return;
+    }
+
+    if (action === 'move') {
+      const groups = (await this.groups.list(p.sourceId)).filter((g) => !g.isAll);
+      const kb = new InlineKeyboard();
+      groups.forEach((g) =>
+        kb.text(`👥 ${g.name} (${g.memberCount})`, `sub:mv:${arg}:${g.id}`).row(),
+      );
+      kb.text('⬅️ Back', `sub:view:${arg}`);
+      await this.render(
+        ctx,
+        groups.length
+          ? '<b>➿ Move to group</b>\nPick the group. They’ll be removed from any others.'
+          : '<b>➿ Move to group</b>\n\n📭 Create a group first.',
+        kb,
+        true,
+      );
+      return;
+    }
+
+    if (action === 'mv') {
+      // arg is "subscriberId:groupId".
+      const sep = arg.lastIndexOf(':');
+      const subId = arg.slice(0, sep);
+      const groupId = arg.slice(sep + 1);
+      const g = await this.groups.moveMember(p.sourceId, subId, groupId);
+      await this.sub(ctx, p, 'view', subId, `✅ Moved to ${g.name}`);
+      return;
+    }
+
+    if (action === 'unsub') {
+      const kb = new InlineKeyboard()
+        .text('✅ Unsubscribe', `sub:unsubY:${arg}`)
+        .text('✖ Cancel', `sub:view:${arg}`);
+      await this.render(
+        ctx,
+        '🚫 Unsubscribe this person?\nThey stop receiving broadcasts until they re-join.',
+        kb,
+        true,
+      );
+      return;
+    }
+
+    if (action === 'unsubY') {
+      await this.subscribers.unsubscribe(p.sourceId, arg);
+      await this.sub(ctx, p, 'list', '', '✅ Unsubscribed');
+      return;
+    }
+  }
+
   /** Compact UTC label, e.g. "Jul 5 14:30". */
   private formatWhen(iso: string): string {
     const d = new Date(iso);
@@ -697,7 +847,8 @@ export class AdminMenu {
       p.sourceId,
       {
         notificationId: b.notificationId!,
-        groupIds: b.groupIds!,
+        groupIds: b.groupIds ?? [],
+        subscriberIds: b.subscriberIds ?? [],
         placeholderValues: {},
         sendKey: `bot-${ctx.from!.id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
       },
@@ -705,7 +856,7 @@ export class AdminMenu {
     );
     clearSession(ctx.from!.id);
     const kb = new InlineKeyboard().text('🏠 Menu', 'menu:home');
-    await this.render(ctx, this.sentSummary(view.totalCount, b.groupIds!.length), kb, true);
+    await this.render(ctx, this.sentSummary(view.totalCount, (b.groupIds ?? []).length), kb, true);
   }
 
   // ── Free-text fallback ──────────────────────────────────────────────────────
@@ -911,6 +1062,7 @@ export class AdminMenu {
     ctx: Context,
     notifId: string,
     groupCsv: string,
+    subCsv = '',
   ): Promise<void> => {
     const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
     const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
@@ -935,6 +1087,7 @@ export class AdminMenu {
       }
     }
     const groupIds = groupCsv.split(',').filter(Boolean);
+    const subscriberIds = subCsv.split(',').filter(Boolean);
     try {
       const view = await conversation.external(() =>
         this.broadcasts.create(
@@ -942,6 +1095,7 @@ export class AdminMenu {
           {
             notificationId: notifId,
             groupIds,
+            subscriberIds,
             placeholderValues: values,
             sendKey: `bot-${ctx.from?.id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
           },
@@ -1095,14 +1249,16 @@ export class AdminMenu {
       .text('🔗 Invite links', 'inv:list')
       .text('📣 Broadcast', 'bc:start')
       .row()
+      .text('👤 Subscribers', 'sub:list')
       .text('⏰ Scheduled', 'sch:list');
   }
 
   private sentSummary(recipients: number, groupCount: number): string {
     if (recipients === 0) {
-      return '📭 No one to send to — those groups have no active subscribers yet.';
+      return '📭 No active recipients — nothing was sent.';
     }
     const people = recipients === 1 ? '1 person' : `${recipients} people`;
+    if (groupCount === 0) return `✅ <b>On its way</b> to ${people}.`;
     const groups = groupCount === 1 ? '1 group' : `${groupCount} groups`;
     return `✅ <b>On its way</b> to ${people} (${groups}).`;
   }

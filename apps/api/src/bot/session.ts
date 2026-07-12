@@ -10,6 +10,7 @@ export interface BotSession {
   broadcast?: {
     notificationId?: string;
     groupIds?: string[];
+    subscriberIds?: string[];
   };
 }
 

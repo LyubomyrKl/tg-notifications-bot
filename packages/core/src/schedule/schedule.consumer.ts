@@ -62,6 +62,7 @@ export class ScheduleConsumer implements OnModuleDestroy {
         {
           notificationId: s.notificationId,
           groupIds: groups.map((g) => g.id),
+          subscriberIds: [],
           placeholderValues: s.placeholderValues as Record<string, string>,
           sendKey: `sched-${s.id}-${job.id}`,
         },

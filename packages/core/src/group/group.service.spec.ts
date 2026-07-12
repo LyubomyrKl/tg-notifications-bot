@@ -50,6 +50,8 @@ function makeFakePrisma() {
       count: async ({ where }: any) =>
         subscribers.filter((s) => whereMatch(s, where)).length,
       findMany: async () => subscribers,
+      findFirst: async ({ where }: any) =>
+        subscribers.find((s) => whereMatch(s, where)) ?? null,
     },
     groupMember: {
       createMany: async ({ data, skipDuplicates }: any) => {
@@ -61,15 +63,30 @@ function makeFakePrisma() {
           members.push(d);
         }
       },
+      create: async ({ data }: any) => {
+        members.push(data);
+        return data;
+      },
       deleteMany: async ({ where }: any) => {
+        // Support the nested `group: { sourceId, isAll }` filter moveMember uses.
+        const groupFilter = where.group;
+        const rest = { ...where };
+        delete rest.group;
         for (let i = members.length - 1; i >= 0; i--) {
-          if (whereMatch(members[i], where)) members.splice(i, 1);
+          const m = members[i];
+          if (!whereMatch(m, rest)) continue;
+          if (groupFilter) {
+            const g = groups.find((x) => x.id === m.groupId);
+            if (!g || !whereMatch(g, groupFilter)) continue;
+          }
+          members.splice(i, 1);
         }
       },
       count: async ({ where }: any) =>
         members.filter((m) => whereMatch(m, where)).length,
       findMany: async () => [],
     },
+    $transaction: async (ops: any[]) => Promise.all(ops),
   };
 }
 
@@ -142,5 +159,46 @@ describe('GroupService', () => {
 
     const view = await svc.removeMember('src_A', g.id, 's1');
     expect(view.memberCount).toBe(0);
+  });
+
+  it('moves a subscriber to another group (drops them from their others)', async () => {
+    const fake = makeFakePrisma();
+    fake.subscribers.push({ id: 's1', sourceId: 'src_A', status: 'active' });
+    const svc = new GroupService(fake as any, subs);
+    const from = await svc.create('src_A', 'Old');
+    const to = await svc.create('src_A', 'New');
+    await svc.addMembers('src_A', from.id, ['s1']);
+
+    const view = await svc.moveMember('src_A', 's1', to.id);
+    expect(view.id).toBe(to.id);
+    expect(view.memberCount).toBe(1);
+    // Only a member of the target now — the old group is empty.
+    expect(fake.members.filter((m) => m.groupId === from.id)).toHaveLength(0);
+    expect(fake.members.filter((m) => m.groupId === to.id)).toHaveLength(1);
+  });
+
+  it('rejects moving a foreign / unknown subscriber', async () => {
+    const fake = makeFakePrisma();
+    const svc = new GroupService(fake as any, subs);
+    const to = await svc.create('src_A', 'New');
+    await expect(
+      svc.moveMember('src_A', 's_foreign', to.id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('cannot move a subscriber into the implicit All group', async () => {
+    const fake = makeFakePrisma();
+    fake.subscribers.push({ id: 's1', sourceId: 'src_A', status: 'active' });
+    fake.groups.push({
+      id: 'g_all',
+      sourceId: 'src_A',
+      name: 'All',
+      isAll: true,
+      createdAt: new Date(),
+    });
+    const svc = new GroupService(fake as any, subs);
+    await expect(
+      svc.moveMember('src_A', 's1', 'g_all'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

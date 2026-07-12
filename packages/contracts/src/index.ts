@@ -164,14 +164,22 @@ export const InviteLinkDetail = InviteLinkView.extend({
 export type InviteLinkDetail = z.infer<typeof InviteLinkDetail>;
 
 // ── Broadcasts ──────────────────────────────────────────────────────────────
-export const CreateBroadcastInput = z.object({
-  notificationId: z.string().min(1),
-  // One or more target groups (use the "All" group id to reach everyone).
-  groupIds: z.array(z.string().min(1)).min(1),
-  placeholderValues: z.record(z.string()).default({}),
-  // Caller-supplied idempotency key — a retried send with the same key is a no-op.
-  sendKey: z.string().min(1).max(200),
-});
+export const CreateBroadcastInput = z
+  .object({
+    notificationId: z.string().min(1),
+    // Target groups (use the "All" group id to reach everyone).
+    groupIds: z.array(z.string().min(1)).default([]),
+    // Target specific subscribers directly (e.g. a 1:1 message). Merged + deduped
+    // with the group recipients.
+    subscriberIds: z.array(z.string().min(1)).default([]),
+    placeholderValues: z.record(z.string()).default({}),
+    // Caller-supplied idempotency key — a retried send with the same key is a no-op.
+    sendKey: z.string().min(1).max(200),
+  })
+  .refine((v) => v.groupIds.length > 0 || v.subscriberIds.length > 0, {
+    message: 'Provide at least one target group or subscriber',
+    path: ['groupIds'],
+  });
 export type CreateBroadcastInput = z.infer<typeof CreateBroadcastInput>;
 
 export const BroadcastView = z.object({

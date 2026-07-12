@@ -62,12 +62,13 @@ function makeFakePrisma() {
     },
     subscriber: {
       findMany: async ({ where }: any) => {
-        let rows = subscribers.filter(
-          (s) => s.sourceId === where.sourceId && s.status === where.status,
-        );
+        let rows = subscribers.filter((s) => s.sourceId === where.sourceId);
+        // Group-resolution path filters by status; direct-target path by id set.
+        if (where.status) rows = rows.filter((s) => s.status === where.status);
+        if (where.id?.in) rows = rows.filter((s) => where.id.in.includes(s.id));
         // when not targeting All, a memberships filter is present; our tests
         // only resolve via the All group, so no membership narrowing needed.
-        return rows.map((s) => ({ id: s.id }));
+        return rows.map((s) => ({ id: s.id, status: s.status }));
       },
     },
     broadcastRecipient: {
@@ -88,6 +89,7 @@ describe('BroadcastService.create', () => {
       svc.create('src_A', {
         notificationId: 'n1',
         groupIds: ['g_all'],
+        subscriberIds: [],
         placeholderValues: {},
         sendKey: 'k1',
       }, 'user_1'),
@@ -101,6 +103,7 @@ describe('BroadcastService.create', () => {
     const view = await svc.create('src_A', {
       notificationId: 'n1',
       groupIds: ['g_all'],
+      subscriberIds: [],
       placeholderValues: { name: 'Ada' },
       sendKey: 'k1',
     }, 'user_1');
@@ -117,6 +120,7 @@ describe('BroadcastService.create', () => {
     const first = await svc.create('src_A', {
       notificationId: 'n1',
       groupIds: ['g_all'],
+      subscriberIds: [],
       placeholderValues: { name: 'Ada' },
       sendKey: 'dup',
     }, 'user_1');
@@ -125,12 +129,73 @@ describe('BroadcastService.create', () => {
     const second = await svc.create('src_A', {
       notificationId: 'n1',
       groupIds: ['g_all'],
+      subscriberIds: [],
       placeholderValues: { name: 'Ada' },
       sendKey: 'dup',
     }, 'user_1');
 
     expect(second.id).toBe(first.id);
     expect(queue.enqueueRecipients).not.toHaveBeenCalled();
+  });
+
+  it('sends directly to a specific subscriber (no groups)', async () => {
+    const fake = makeFakePrisma();
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
+    const view = await svc.create('src_A', {
+      notificationId: 'n1',
+      groupIds: [],
+      subscriberIds: ['s1'],
+      placeholderValues: { name: 'Ada' },
+      sendKey: 'k1',
+    }, 'user_1');
+
+    expect(view.totalCount).toBe(1);
+    expect(view.groupIds).toHaveLength(0);
+    expect(queue.enqueueRecipients.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it('unions & dedupes group members with direct subscribers', async () => {
+    const fake = makeFakePrisma();
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
+    const view = await svc.create('src_A', {
+      notificationId: 'n1',
+      groupIds: ['g_all'], // s1, s2
+      subscriberIds: ['s1'], // already covered → no double
+      placeholderValues: { name: 'Ada' },
+      sendKey: 'k1',
+    }, 'user_1');
+
+    expect(view.totalCount).toBe(2);
+  });
+
+  it('silently drops an unsubscribed direct target (nothing sent)', async () => {
+    const fake = makeFakePrisma();
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
+    const view = await svc.create('src_A', {
+      notificationId: 'n1',
+      groupIds: [],
+      subscriberIds: ['s3'], // unsubscribed
+      placeholderValues: { name: 'Ada' },
+      sendKey: 'k1',
+    }, 'user_1');
+
+    expect(view.totalCount).toBe(0);
+    expect(view.status).toBe('completed');
+    expect(queue.enqueueRecipients.mock.calls[0][0]).toHaveLength(0);
+  });
+
+  it('rejects a direct subscriber from another tenant', async () => {
+    const fake = makeFakePrisma();
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
+    await expect(
+      svc.create('src_A', {
+        notificationId: 'n1',
+        groupIds: [],
+        subscriberIds: ['s_foreign'],
+        placeholderValues: { name: 'Ada' },
+        sendKey: 'k1',
+      }, 'user_1'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('rejects a notification from another tenant', async () => {
@@ -140,6 +205,7 @@ describe('BroadcastService.create', () => {
       svc.create('src_B', {
         notificationId: 'n1',
         groupIds: ['g_all'],
+        subscriberIds: [],
         placeholderValues: { name: 'Ada' },
         sendKey: 'k1',
       }, 'user_1'),
