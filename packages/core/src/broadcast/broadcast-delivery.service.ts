@@ -7,6 +7,7 @@ import {
 } from '@paedavic/database';
 import { TelegramSendError, TelegramService } from '@paedavic/telegram';
 import { renderTemplate } from '../notification/placeholder.util';
+import { buildInteractionKeyboard } from './interaction-keyboard';
 
 export type DeliveryOutcome = 'sent' | 'blocked' | 'skipped' | 'unsubscribed';
 
@@ -67,6 +68,7 @@ export class BroadcastDeliveryService {
       await this.telegram.sendText(
         Number(recipient.subscriber.telegramUserId),
         text,
+        { keyboard: buildInteractionKeyboard(recipient.broadcast) },
       );
       await this.finalize(recipientId, broadcastId, RecipientStatus.sent, {
         sentAt: new Date(),

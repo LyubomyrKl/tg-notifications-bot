@@ -22,6 +22,7 @@ function makeFakePrisma() {
           mediaUrl: data.mediaUrl ?? null,
           mediaType: data.mediaType ?? null,
           placeholders: data.placeholders ?? [],
+          ephemeral: data.ephemeral ?? false,
           sourceId: data.sourceId,
           archivedAt: null,
           createdAt: new Date(),
@@ -80,6 +81,25 @@ describe('NotificationService (tenant isolation)', () => {
     expect((await svc.preview('src_A', n.id, { name: 'Ada' })).text).toBe(
       'Hi Ada',
     );
+  });
+
+  it('createInline hides one-off messages from the gallery but keeps them fetchable', async () => {
+    const fake = makeFakePrisma();
+    const svc = new NotificationService(fake as any);
+
+    const once = await svc.createInline('src_A', {
+      body: 'Reminder for {when}',
+      ephemeral: true,
+    });
+    // Auto-named from the first line, placeholders parsed.
+    expect(once.name).toBe('Reminder for {when}');
+    expect(once.placeholders).toEqual(['when']);
+
+    // Excluded from the gallery list, but a broadcast can still fetch it by id.
+    expect(await svc.list('src_A')).toHaveLength(0);
+    expect((await svc.get('src_A', once.id)).id).toBe(once.id);
+    // Opt-in flag surfaces it (e.g. the responses screen resolving a name).
+    expect(await svc.list('src_A', { includeEphemeral: true })).toHaveLength(1);
   });
 
   it('duplicate clones within the same Source as a (copy)', async () => {

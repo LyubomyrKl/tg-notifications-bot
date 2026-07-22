@@ -11,6 +11,8 @@ export interface BotSession {
     notificationId?: string;
     groupIds?: string[];
     subscriberIds?: string[];
+    // Optional poll/question attached at send time.
+    interaction?: { type: 'poll' | 'question'; options: string[] };
   };
 }
 

@@ -1,10 +1,12 @@
 import {Injectable, OnModuleDestroy,} from '@nestjs/common';
 import {loadConfig} from '@paedavic/config';
-import {Bot} from 'grammy';
+import {Bot, InlineKeyboard} from 'grammy';
 import {classifySendError, TelegramSendError} from './send-error';
 
 export interface SendTextOptions {
   parseMode?: 'HTML' | 'MarkdownV2';
+  /** Inline keyboard to attach (e.g. poll options or an "Answer" button). */
+  keyboard?: InlineKeyboard;
 }
 
 /**
@@ -63,6 +65,7 @@ export class TelegramService implements OnModuleDestroy {
     try {
       await this.bot.api.sendMessage(chatId, text, {
         parse_mode: opts.parseMode,
+        reply_markup: opts.keyboard,
       });
     } catch (err) {
         throw classifySendError(err);

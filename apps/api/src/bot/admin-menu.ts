@@ -1,19 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  answerCallback,
   type AuthPrincipal,
   BroadcastService,
   GroupService,
   InviteService,
   NotificationService,
+  ResponseService,
   ScheduleService,
   SourceService,
   SubscriberService,
+  voteCallback,
 } from '@paedavic/core';
 import {
   BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import type { NotificationView } from '@paedavic/contracts';
 import { conversations, createConversation } from '@grammyjs/conversations';
 import { type Bot, type Context, InlineKeyboard } from 'grammy';
 
@@ -66,6 +70,7 @@ export class AdminMenu {
     private readonly broadcasts: BroadcastService,
     private readonly subscribers: SubscriberService,
     private readonly schedule: ScheduleService,
+    private readonly responses: ResponseService,
   ) {}
 
   /**
@@ -163,13 +168,21 @@ export class AdminMenu {
 
   private async onCallback(ctx: Context): Promise<void> {
     const data = ctx.callbackQuery?.data ?? '';
+    const [ns, action, ...rest] = data.split(':');
+    const arg = rest.join(':'); // e.g. "groupId:subscriberId" for toggles
+
+    // Subscriber responses (poll vote / answer prompt) work for ANY user, not
+    // just owners — handle them before the owner gate. They ack the spinner
+    // themselves (with a confirmation toast).
+    if (ns === 'rv' || ns === 'ra') {
+      return void (await this.onResponseCallback(ctx, ns, action, arg));
+    }
+
     await ctx.answerCallbackQuery().catch(() => undefined); // ack the spinner
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
 
     try {
-      const [ns, action, ...rest] = data.split(':');
-      const arg = rest.join(':'); // e.g. "groupId:subscriberId" for toggles
       if (ns === 'noop') return; // pagination label tap — already acked
       if (ns === 'menu') return void (await this.openHome(ctx, true));
       if (ns === 'notif') return void (await this.notif(ctx, principal, action, arg));
@@ -178,8 +191,44 @@ export class AdminMenu {
       if (ns === 'bc') return void (await this.bc(ctx, principal, action, arg));
       if (ns === 'sch') return void (await this.sch(ctx, principal, action, arg));
       if (ns === 'sub') return void (await this.sub(ctx, principal, action, arg));
+      if (ns === 'res') return void (await this.res(ctx, principal, action, arg));
     } catch (err) {
       this.logger.error(`menu action "${data}" failed: ${(err as Error).message}`);
+      await ctx
+        .answerCallbackQuery({ text: `⚠️ ${humanError(err)}`, show_alert: true })
+        .catch(() => undefined);
+    }
+  }
+
+  /**
+   * A subscriber tapped a poll option (`rv:<broadcastId>:<idx>`) or the Answer
+   * button (`ra:<broadcastId>`). Records the vote inline, or opens the guided
+   * answer flow. Not owner-gated — the recorder validates active membership.
+   */
+  private async onResponseCallback(
+    ctx: Context,
+    ns: string,
+    broadcastId: string,
+    arg: string,
+  ): Promise<void> {
+    const tgId = ctx.from?.id;
+    if (!tgId) return;
+    try {
+      if (ns === 'rv') {
+        const { label } = await this.responses.recordVote(
+          broadcastId,
+          tgId,
+          parseInt(arg, 10),
+        );
+        await ctx
+          .answerCallbackQuery({ text: `✅ Recorded: ${label}` })
+          .catch(() => undefined);
+        return;
+      }
+      // ns === 'ra' → open the free-text answer conversation.
+      await ctx.answerCallbackQuery().catch(() => undefined);
+      await this.enterConvo(ctx, 'answerQuestion', broadcastId);
+    } catch (err) {
       await ctx
         .answerCallbackQuery({ text: `⚠️ ${humanError(err)}`, show_alert: true })
         .catch(() => undefined);
@@ -519,20 +568,42 @@ export class AdminMenu {
       const items = await this.notifications.list(p.sourceId);
       const kb = new InlineKeyboard();
       items.forEach((n) => kb.text(`📝 ${n.name}`, `bc:notif:${n.id}`).row());
+      kb.text('✍️ Write a new message', 'bc:new').row();
       kb.text('🏠 Menu', 'menu:home');
       await this.render(
         ctx,
         items.length
-          ? '<b>📣 Broadcast</b>\nPick a notification to send:'
-          : '<b>📣 Broadcast</b>\n\n📭 Create a notification first.',
+          ? '<b>📣 Broadcast</b>\nPick a saved message, or write a new one:'
+          : '<b>📣 Broadcast</b>\n\nNo saved messages yet — tap ✍️ to write one.',
         kb,
         true,
       );
       return;
     }
     if (action === 'notif') {
-      session.broadcast = { notificationId: arg, groupIds: [] };
+      // Preview the picked template, then choose how to use it: send it verbatim,
+      // or take it as a base and write something on top for this send only.
+      const n = await this.notifications.get(p.sourceId, arg);
+      const kb = new InlineKeyboard()
+        .text('➡️ Use as is', `bc:use:${n.id}`)
+        .row()
+        .text('✏️ Add text on top', `bc:adjust:${n.id}`)
+        .row()
+        .text('⬅️ Back', 'bc:start');
+      await this.render(ctx, this.notifPreview(n), kb, true);
+      return;
+    }
+    if (action === 'use') {
+      session.broadcast = { notificationId: arg, groupIds: [], subscriberIds: [] };
       await this.renderGroupSelect(ctx, p);
+      return;
+    }
+    if (action === 'new') {
+      await this.enterConvo(ctx, 'composeBroadcastMsg');
+      return;
+    }
+    if (action === 'adjust') {
+      await this.enterConvo(ctx, 'adjustBroadcastMsg', arg);
       return;
     }
     if (action === 'gtog') {
@@ -544,25 +615,77 @@ export class AdminMenu {
       await this.renderGroupSelect(ctx, p);
       return;
     }
+    if (action === 'groups') {
+      await this.renderGroupSelect(ctx, p);
+      return;
+    }
+    if (action === 'people') {
+      await this.renderSubscriberSelect(ctx, p, parseInt(arg || '0', 10) || 0);
+      return;
+    }
+    if (action === 'stog') {
+      // arg is "subscriberId:page" — keep the page so the list doesn't jump.
+      const [subId, pageStr] = arg.split(':');
+      const ids = session.broadcast?.subscriberIds ?? [];
+      const i = ids.indexOf(subId);
+      if (i >= 0) ids.splice(i, 1);
+      else ids.push(subId);
+      session.broadcast = { ...session.broadcast, subscriberIds: ids };
+      await this.renderSubscriberSelect(ctx, p, parseInt(pageStr || '0', 10) || 0);
+      return;
+    }
     if (action === 'go') {
       const b = session.broadcast;
-      if (!b?.notificationId || !b.groupIds?.length) {
+      if (!b?.notificationId || !this.hasTargets(b)) {
         await this.renderGroupSelect(ctx, p);
         return;
       }
+      // Offer an optional interaction before the send/schedule choice.
       const kb = new InlineKeyboard()
-        .text('✅ Send now', 'bc:now')
-        .text('⏰ Schedule', 'bc:sched')
+        .text('➡️ Just send', 'bc:react:none')
+        .row()
+        .text('📊 Poll', 'bc:react:poll')
+        .text('❓ Question', 'bc:react:q')
         .row()
         .text('✖ Cancel', 'menu:home');
-      await this.render(ctx, '📣 Send now, or schedule for later?', kb, true);
+      await this.render(
+        ctx,
+        '📣 <b>Add a response option?</b>\n' +
+          '<i>Poll = recipients tap a button · Question = they reply with text.</i>',
+        kb,
+        true,
+      );
+      return;
+    }
+    if (action === 'react') {
+      const b = session.broadcast;
+      if (!b?.notificationId || !this.hasTargets(b)) {
+        await this.renderGroupSelect(ctx, p);
+        return;
+      }
+      if (arg === 'poll') {
+        await this.enterConvo(ctx, 'pollSetup'); // collects options, then send choice
+        return;
+      }
+      session.broadcast = {
+        ...b,
+        interaction: arg === 'q' ? { type: 'question', options: [] } : undefined,
+      };
+      await this.renderSendChoice(ctx);
       return;
     }
     if (action === 'now') {
       const b = session.broadcast!;
       const n = await this.notifications.get(p.sourceId, b.notificationId!);
       if (n.placeholders.length) {
-        await this.enterConvo(ctx, 'bcFill', b.notificationId!, b.groupIds!.join(','), '');
+        await this.enterConvo(
+          ctx,
+          'bcFill',
+          b.notificationId!,
+          (b.groupIds ?? []).join(','),
+          (b.subscriberIds ?? []).join(','),
+          JSON.stringify(b.interaction ?? null),
+        );
         return;
       }
       await this.showConfirm(ctx, p);
@@ -570,6 +693,8 @@ export class AdminMenu {
     }
     if (action === 'sched') {
       const b = session.broadcast;
+      // Scheduling targets groups only (a ScheduledBroadcast has no subscriber
+      // list); direct recipients are an immediate-send feature.
       if (!b?.notificationId || !b.groupIds?.length) {
         await this.renderGroupSelect(ctx, p);
         return;
@@ -580,6 +705,35 @@ export class AdminMenu {
     if (action === 'send') {
       await this.doSend(ctx, p);
     }
+  }
+
+  /**
+   * The send-now / schedule choice. Interactive sends (poll/question) go out
+   * immediately — scheduling them is a v1 non-goal — so Schedule is hidden once
+   * an interaction is attached.
+   */
+  private async renderSendChoice(ctx: Context): Promise<void> {
+    const b = getSession(ctx.from!.id).broadcast;
+    const tag = b?.interaction
+      ? b.interaction.type === 'poll'
+        ? `\n<i>📊 Poll: ${b.interaction.options.map(esc).join(' · ')}</i>`
+        : '\n<i>❓ Question — recipients can reply.</i>'
+      : '';
+    const kb = new InlineKeyboard().text('✅ Send now', 'bc:now');
+    // Scheduling supports groups only — hide it once an interaction or direct
+    // recipients are in play (both are immediate-send features).
+    const canSchedule = !b?.interaction && !(b?.subscriberIds?.length);
+    if (canSchedule) kb.text('⏰ Schedule', 'bc:sched');
+    kb.row().text('✖ Cancel', 'menu:home');
+    await this.render(ctx, `📣 Send now, or schedule for later?${tag}`, kb, true);
+  }
+
+  /** True when a broadcast has at least one target group or direct subscriber. */
+  private hasTargets(b: {
+    groupIds?: string[];
+    subscriberIds?: string[];
+  }): boolean {
+    return !!(b.groupIds?.length || b.subscriberIds?.length);
   }
 
   /** Enter a grammY conversation (typed loosely; plugin adds ctx.conversation). */
@@ -788,6 +942,71 @@ export class AdminMenu {
     }
   }
 
+  // ── Responses (poll tallies + free-text answers) ────────────────────────────
+
+  private async res(
+    ctx: Context,
+    p: AuthPrincipal,
+    action: string,
+    arg: string,
+  ): Promise<void> {
+    if (action === 'list') {
+      const [all, notifs] = await Promise.all([
+        this.broadcasts.list(p.sourceId),
+        // Include ephemeral one-offs so a one-time poll/question still shows a name.
+        this.notifications.list(p.sourceId, { includeEphemeral: true }),
+      ]);
+      const interactive = all.filter((b) => b.interaction.type !== 'none');
+      const names = new Map(notifs.map((n) => [n.id, n.name]));
+      const { slice, pg, pages } = this.paginate(
+        interactive,
+        parseInt(arg || '0', 10) || 0,
+      );
+      const kb = new InlineKeyboard();
+      slice.forEach((b) => {
+        const icon = b.interaction.type === 'poll' ? '📊' : '❓';
+        const name = names.get(b.notificationId) ?? 'broadcast';
+        kb.text(
+          `${icon} ${name} · ${b.responseCount} ${b.responseCount === 1 ? 'reply' : 'replies'}`,
+          `res:view:${b.id}`,
+        ).row();
+      });
+      this.navRow(kb, 'res:list:', pg, pages);
+      kb.text('🏠 Menu', 'menu:home');
+      const header = interactive.length
+        ? '<b>📥 Responses</b>\nPick an interactive broadcast to see replies.'
+        : '<b>📥 Responses</b>\n\n📭 No polls or questions sent yet.';
+      await this.render(ctx, header, kb, true);
+      return;
+    }
+
+    if (action === 'view') {
+      const data = await this.responses.list(p.sourceId, arg);
+      const kb = new InlineKeyboard().text('⬅️ Back', 'res:list');
+      let body: string;
+      if (data.interaction.type === 'poll') {
+        const total = data.responses.length;
+        const lines = data.tallies.map((t) => {
+          const pct = total ? Math.round((t.count / total) * 100) : 0;
+          return `${esc(t.label)} — <b>${t.count}</b> (${pct}%)`;
+        });
+        body =
+          `<b>📊 Poll results</b> · ${total} ${total === 1 ? 'vote' : 'votes'}\n\n` +
+          (lines.join('\n') || 'No votes yet.');
+      } else {
+        const lines = data.responses.map((r) => {
+          const who = r.username ? `@${r.username}` : `#${r.telegramUserId}`;
+          return `<b>${esc(who)}</b>: ${esc(r.text ?? '')}`;
+        });
+        body =
+          `<b>❓ Answers</b> · ${data.responses.length}\n\n` +
+          (lines.join('\n\n') || 'No answers yet.');
+      }
+      await this.render(ctx, body, kb, true);
+      return;
+    }
+  }
+
   /** Compact UTC label, e.g. "Jul 5 14:30". */
   private formatWhen(iso: string): string {
     const d = new Date(iso);
@@ -796,10 +1015,22 @@ export class AdminMenu {
     return `${months[d.getUTCMonth()]} ${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
   }
 
-  /** Multi-select group picker for a broadcast (✅/⬜ toggles + Continue). */
+  /** A read-only card for a picked template: name, body (clipped), placeholders. */
+  private notifPreview(n: NotificationView): string {
+    const body = n.body.length > 600 ? `${n.body.slice(0, 600)}…` : n.body;
+    const ph = n.placeholders.length
+      ? `\n\n<i>Placeholders:</i> ${esc(n.placeholders.map((x) => `{${x}}`).join(', '))}`
+      : '';
+    return `<b>📝 ${esc(n.name)}</b>\n\n${esc(body)}${ph}`;
+  }
+
+  /** Multi-select group picker for a broadcast (✅/⬜ toggles + Continue). Also
+   *  the entry point to the individual-people picker. */
   private async renderGroupSelect(ctx: Context, p: AuthPrincipal): Promise<void> {
     const session = getSession(ctx.from!.id);
-    const selected = new Set(session.broadcast?.groupIds ?? []);
+    const b = session.broadcast;
+    const selected = new Set(b?.groupIds ?? []);
+    const peopleCount = b?.subscriberIds?.length ?? 0;
     const groups = await this.groups.list(p.sourceId);
     const kb = new InlineKeyboard();
     groups.forEach((g) =>
@@ -810,30 +1041,67 @@ export class AdminMenu {
         )
         .row(),
     );
-    if (selected.size > 0) kb.text('▶️ Continue', 'bc:go').row();
+    kb.text(
+      peopleCount ? `👤 People (${peopleCount} selected)` : '👤 Add specific people',
+      'bc:people',
+    ).row();
+    if (this.hasTargets(b ?? {})) kb.text('▶️ Continue', 'bc:go').row();
     kb.text('✖ Cancel', 'menu:home');
     await this.render(
       ctx,
-      `<b>📣 Broadcast</b>\nSelect groups to send to (${selected.size} selected):`,
+      `<b>📣 Broadcast</b>\nPick groups and/or people ` +
+        `(${selected.size} group${selected.size === 1 ? '' : 's'}, ${peopleCount} ` +
+        `${peopleCount === 1 ? 'person' : 'people'}):`,
       kb,
       true,
     );
+  }
+
+  /** Multi-select individual subscribers to add to the broadcast (paginated). */
+  private async renderSubscriberSelect(
+    ctx: Context,
+    p: AuthPrincipal,
+    page: number,
+  ): Promise<void> {
+    const session = getSession(ctx.from!.id);
+    const selected = new Set(session.broadcast?.subscriberIds ?? []);
+    const all = await this.subscribers.list(p.sourceId);
+    const { slice, pg, pages } = this.paginate(all, page);
+    const kb = new InlineKeyboard();
+    slice.forEach((s) => {
+      const label = s.username ? `@${s.username}` : s.telegramUserId;
+      kb.text(
+        `${selected.has(s.id) ? '✅' : '⬜'} ${label}`,
+        `bc:stog:${s.id}:${pg}`,
+      ).row();
+    });
+    this.navRow(kb, 'bc:people:', pg, pages);
+    kb.text('⬅️ Back to groups', 'bc:groups').row();
+    kb.text('✖ Cancel', 'menu:home');
+    const body = all.length
+      ? `<b>👤 Add people</b>\nTap to include (${selected.size} selected):`
+      : '<b>👤 Add people</b>\n\n📭 No subscribers yet — share an invite link first.';
+    await this.render(ctx, body, kb, true);
   }
 
   private async showConfirm(ctx: Context, p: AuthPrincipal): Promise<void> {
     const session = getSession(ctx.from!.id);
     const b = session.broadcast!;
     const n = await this.notifications.get(p.sourceId, b.notificationId!);
-    const names = (await this.groups.list(p.sourceId))
-      .filter((g) => b.groupIds!.includes(g.id))
-      .map((g) => g.name)
-      .join(', ');
+    const groupNames = (await this.groups.list(p.sourceId))
+      .filter((g) => (b.groupIds ?? []).includes(g.id))
+      .map((g) => g.name);
+    const peopleCount = b.subscriberIds?.length ?? 0;
+    const parts = [
+      ...groupNames,
+      ...(peopleCount ? [`${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}`] : []),
+    ];
     const kb = new InlineKeyboard()
       .text('✅ Send now', 'bc:send')
       .text('✖ Cancel', 'menu:home');
     await this.render(
       ctx,
-      `📣 Send <b>${esc(n.name)}</b> to: ${esc(names)}?`,
+      `📣 Send <b>${esc(n.name)}</b> to: ${esc(parts.join(', '))}?`,
       kb,
       true,
     );
@@ -850,6 +1118,7 @@ export class AdminMenu {
         groupIds: b.groupIds ?? [],
         subscriberIds: b.subscriberIds ?? [],
         placeholderValues: {},
+        interaction: b.interaction,
         sendKey: `bot-${ctx.from!.id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
       },
       `telegram:${ctx.from!.id}`,
@@ -880,7 +1149,11 @@ export class AdminMenu {
     bot.use(createConversation(this.editNotifConvo as never, 'editNotif') as never);
     bot.use(createConversation(this.createGroupConvo as never, 'createGroup') as never);
     bot.use(createConversation(this.bcFillConvo as never, 'bcFill') as never);
+    bot.use(createConversation(this.composeBroadcastMsgConvo as never, 'composeBroadcastMsg') as never);
+    bot.use(createConversation(this.adjustBroadcastMsgConvo as never, 'adjustBroadcastMsg') as never);
     bot.use(createConversation(this.scheduleBroadcastConvo as never, 'scheduleBroadcast') as never);
+    bot.use(createConversation(this.pollSetupConvo as never, 'pollSetup') as never);
+    bot.use(createConversation(this.answerQuestionConvo as never, 'answerQuestion') as never);
   }
 
   /** Guided notification authoring: name → body, Cancel at every step. */
@@ -1063,6 +1336,7 @@ export class AdminMenu {
     notifId: string,
     groupCsv: string,
     subCsv = '',
+    interactionJson = 'null',
   ): Promise<void> => {
     const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
     const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
@@ -1088,6 +1362,10 @@ export class AdminMenu {
     }
     const groupIds = groupCsv.split(',').filter(Boolean);
     const subscriberIds = subCsv.split(',').filter(Boolean);
+    const interaction =
+      (JSON.parse(interactionJson) as
+        | { type: 'poll' | 'question'; options: string[] }
+        | null) ?? undefined;
     try {
       const view = await conversation.external(() =>
         this.broadcasts.create(
@@ -1097,6 +1375,7 @@ export class AdminMenu {
             groupIds,
             subscriberIds,
             placeholderValues: values,
+            interaction,
             sendKey: `bot-${ctx.from?.id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
           },
           `telegram:${ctx.from?.id}`,
@@ -1111,6 +1390,239 @@ export class AdminMenu {
         parse_mode: 'HTML',
         reply_markup: this.homeKeyboard(),
       });
+    }
+  };
+
+  /**
+   * Compose a brand-new message inside the broadcast flow. The owner types the
+   * body, then chooses to save it as a reusable template or send it just this
+   * once — either way it becomes the broadcast's message.
+   */
+  private composeBroadcastMsgConvo = async (
+    conversation: Conv,
+    ctx: Context,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    await ctx.reply(
+      '✍️ <b>New message</b>\nSend the text to broadcast. Use {placeholders} like ' +
+        '{name} to personalize.',
+      { parse_mode: 'HTML', reply_markup: cancel },
+    );
+    let body = '';
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = u.message?.text;
+      if (!t || !t.trim()) {
+        await ctx.reply('Please send the message as text, or ✖ Cancel.', {
+          reply_markup: cancel,
+        });
+        continue;
+      }
+      body = t;
+      break;
+    }
+    await this.finishComposed(conversation, ctx, body, 'Save to gallery');
+  };
+
+  /**
+   * Take a saved template as a base and write something on top for this send.
+   * The added text goes above the base body; the result can be saved as a new
+   * template or sent once, leaving the original untouched.
+   */
+  private adjustBroadcastMsgConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    baseId: string,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    let base: NotificationView;
+    try {
+      base = await conversation.external(() => this.notifications.get(sourceId, baseId));
+    } catch {
+      return void (await ctx.reply('That message no longer exists.', {
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
+    const preview = base.body.length > 500 ? `${base.body.slice(0, 500)}…` : base.body;
+    await ctx.reply(
+      `✏️ <b>Add text on top of</b> “${esc(base.name)}”.\n\n` +
+        `<i>Base message:</i>\n${esc(preview)}\n\n` +
+        'Send the text to add — it will appear <b>above</b> the base.',
+      { parse_mode: 'HTML', reply_markup: cancel },
+    );
+    let extra = '';
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = u.message?.text;
+      if (!t || !t.trim()) {
+        await ctx.reply('Please send the text to add, or ✖ Cancel.', { reply_markup: cancel });
+        continue;
+      }
+      extra = t;
+      break;
+    }
+    const combined = `${extra}\n\n${base.body}`;
+    await this.finishComposed(
+      conversation,
+      ctx,
+      combined,
+      'Save as template',
+      `${base.name} (edited)`,
+    );
+  };
+
+  /**
+   * Shared tail for the compose/adjust flows: ask one-time vs saved, create the
+   * (possibly ephemeral) notification, stash it on the session, then hand off to
+   * the recipient picker via a button — so nav stays edit-in-place from there.
+   */
+  private finishComposed = async (
+    conversation: Conv,
+    ctx: Context,
+    body: string,
+    saveVerb: string,
+    name?: string,
+  ): Promise<void> => {
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+
+    const modeKb = new InlineKeyboard()
+      .text('1️⃣ Just this once', 'convo:save:once')
+      .text(`💾 ${saveVerb}`, 'convo:save:keep')
+      .row()
+      .text('✖ Cancel', 'convo:cancel');
+    // Show the final message (the merged result, for the adjust flow) so the owner
+    // sees exactly what will go out before choosing how to keep it.
+    const preview = body.length > 600 ? `${body.slice(0, 600)}…` : body;
+    await ctx.reply(
+      `📄 <b>Your message</b>\n\n${esc(preview)}\n\n` +
+        '💾 <b>Keep this message?</b>\n<i>Save it to reuse later, or send it just this once.</i>',
+      { parse_mode: 'HTML', reply_markup: modeKb },
+    );
+    let ephemeral = true;
+    for (;;) {
+      const u = await conversation.wait();
+      const d = u.callbackQuery?.data;
+      if (d === 'convo:save:once' || d === 'convo:save:keep') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        ephemeral = d === 'convo:save:once';
+        break;
+      }
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      await ctx.reply(`Tap “Just this once” or “${saveVerb}”.`, { reply_markup: modeKb });
+    }
+
+    let created: NotificationView;
+    try {
+      created = await conversation.external(() =>
+        this.notifications.createInline(sourceId, { body, name, ephemeral }),
+      );
+    } catch (err) {
+      return void (await ctx.reply(`⚠️ ${esc(humanError(err))}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
+
+    await conversation.external(() => {
+      const s = getSession(ctx.from!.id);
+      s.broadcast = { notificationId: created.id, groupIds: [], subscriberIds: [] };
+    });
+
+    const note = ephemeral
+      ? '<i>One-time message — not saved to your gallery.</i>'
+      : `<i>Saved as “${esc(created.name)}”.</i>`;
+    const ph = created.placeholders.length
+      ? `\n<i>You'll fill ${esc(created.placeholders.map((x) => `{${x}}`).join(', '))} before it sends.</i>`
+      : '';
+    const kb = new InlineKeyboard()
+      .text('▶️ Choose recipients', 'bc:groups')
+      .row()
+      .text('✖ Cancel', 'menu:home');
+    await ctx.reply(`✅ Ready. ${note}${ph}\n\nNow pick who gets it.`, {
+      parse_mode: 'HTML',
+      reply_markup: kb,
+    });
+  };
+
+  /** Owner sets up a poll: collect 2–4 options, stash on the session, then send. */
+  private pollSetupConvo = async (
+    conversation: Conv,
+    ctx: Context,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    await ctx.reply(
+      '📊 <b>Poll options</b>\nSend 2–4 options — one per line (or comma-separated).',
+      { parse_mode: 'HTML', reply_markup: cancel },
+    );
+    let options: string[] = [];
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      options = (u.message?.text ?? '')
+        .split(/[\n,]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (options.length < 2 || options.length > 4) {
+        await ctx.reply('Please send between 2 and 4 options.', { reply_markup: cancel });
+        continue;
+      }
+      if (options.some((o) => o.length > 64)) {
+        await ctx.reply('Each option must be 64 characters or fewer.', { reply_markup: cancel });
+        continue;
+      }
+      break;
+    }
+    await conversation.external(() => {
+      const s = getSession(ctx.from!.id);
+      s.broadcast = { ...s.broadcast, interaction: { type: 'poll', options } };
+    });
+    const kb = new InlineKeyboard()
+      .text('✅ Send now', 'bc:now')
+      .row()
+      .text('✖ Cancel', 'menu:home');
+    await ctx.reply(
+      `📊 Poll ready: <i>${options.map(esc).join(' · ')}</i>\nSend now?`,
+      { parse_mode: 'HTML', reply_markup: kb },
+    );
+  };
+
+  /** A subscriber taps “Answer” → capture one free-text reply and record it. */
+  private answerQuestionConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    broadcastId: string,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    await ctx.reply('✍️ Type your answer:', { reply_markup: cancel });
+    let answer = '';
+    for (;;) {
+      const u = await conversation.wait();
+      // Subscriber-facing: a plain cancel (no owner menu).
+      if (u.callbackQuery || (u.message?.text ?? '').startsWith('/')) {
+        if (u.callbackQuery) await u.answerCallbackQuery().catch(() => undefined);
+        return void (await ctx.reply('✖ Cancelled.'));
+      }
+      const t = u.message?.text;
+      if (!t || !t.trim()) {
+        await ctx.reply('Please send your answer as text, or ✖ Cancel.', { reply_markup: cancel });
+        continue;
+      }
+      answer = t;
+      break;
+    }
+    const tgId = ctx.from!.id;
+    try {
+      await conversation.external(() =>
+        this.responses.recordText(broadcastId, tgId, answer),
+      );
+      await ctx.reply('✅ Sent — thanks!');
+    } catch (err) {
+      await ctx.reply(`⚠️ ${esc(humanError(err))}`);
     }
   };
 
@@ -1250,7 +1762,9 @@ export class AdminMenu {
       .text('📣 Broadcast', 'bc:start')
       .row()
       .text('👤 Subscribers', 'sub:list')
-      .text('⏰ Scheduled', 'sch:list');
+      .text('⏰ Scheduled', 'sch:list')
+      .row()
+      .text('📥 Responses', 'res:list');
   }
 
   private sentSummary(recipients: number, groupCount: number): string {

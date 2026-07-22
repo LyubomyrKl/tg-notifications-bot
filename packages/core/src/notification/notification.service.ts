@@ -36,16 +36,43 @@ export class NotificationService {
 
   async list(
     sourceId: string,
-    opts: { includeArchived?: boolean } = {},
+    opts: { includeArchived?: boolean; includeEphemeral?: boolean } = {},
   ): Promise<NotificationView[]> {
     const rows = await this.prisma.notification.findMany({
       where: {
         sourceId,
         ...(opts.includeArchived ? {} : { archivedAt: null }),
+        // The gallery (and every picker built on it) shows saved templates only;
+        // one-off messages composed for a single send stay hidden.
+        ...(opts.includeEphemeral ? {} : { ephemeral: false }),
       },
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((r) => this.toView(r));
+  }
+
+  /**
+   * Create a message inline from the broadcast composer — either a "just this
+   * once" send (`ephemeral: true`, hidden from the gallery) or a brand-new saved
+   * template. A one-off gets an auto-derived name from its first line; a saved one
+   * uses the given name. Notification names aren't unique per source (the gallery
+   * already tolerates duplicates), so no collision handling is needed.
+   */
+  async createInline(
+    sourceId: string,
+    input: { body: string; name?: string; ephemeral?: boolean },
+  ): Promise<NotificationView> {
+    const name = (input.name?.trim() || deriveName(input.body)).slice(0, 160);
+    const created = await this.prisma.notification.create({
+      data: {
+        sourceId,
+        name,
+        body: input.body,
+        placeholders: parsePlaceholders(input.body),
+        ephemeral: input.ephemeral ?? false,
+      },
+    });
+    return this.toView(created);
   }
 
   async get(sourceId: string, id: string): Promise<NotificationView> {
@@ -134,4 +161,14 @@ export class NotificationService {
       updatedAt: n.updatedAt.toISOString(),
     };
   }
+}
+
+/** A short, human name for an inline message: its first non-empty line, trimmed. */
+function deriveName(body: string): string {
+  const firstLine = body
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  const name = (firstLine ?? 'Message').replace(/\s+/g, ' ').trim();
+  return name.length > 60 ? `${name.slice(0, 57)}…` : name;
 }

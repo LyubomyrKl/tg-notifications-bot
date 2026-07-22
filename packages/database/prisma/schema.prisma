@@ -60,6 +60,7 @@ model Source {
   broadcasts    Broadcast[]
   auditLogs     AuditLog[]
   scheduled     ScheduledBroadcast[]
+  responses     BroadcastResponse[]
 
   @@index([ownerId])
   @@map("sources")
@@ -139,6 +140,7 @@ model Subscriber {
   memberships GroupMember[]
   inviteJoins InviteJoin[]
   recipients  BroadcastRecipient[]
+  responses   BroadcastResponse[]
 
   @@unique([sourceId, telegramUserId])
   @@index([sourceId])
@@ -193,6 +195,12 @@ model Notification {
 
   // Parsed placeholder names ({title} → "title"), deduped, cached on write.
   placeholders String[]
+
+  // One-off messages composed inside the broadcast flow (a "just this once" send,
+  // or a template edited on top of a base). They are real, sendable/schedulable
+  // rows — a Broadcast references them for history/responses — but are hidden from
+  // the reusable template gallery. Saved templates have this false.
+  ephemeral Boolean @default(false)
 
   // Tenant owner. Every query is scoped by this; soft-delete via archivedAt.
   sourceId   String
@@ -266,6 +274,15 @@ enum RecipientStatus {
   blocked
 }
 
+/// What (if anything) a broadcast asks of its recipients. `none` = fire-and-forget
+/// (the default). `poll` = tap one of `pollOptions`. `question` = tap Answer, then
+/// type a free-text reply. Drives the inline keyboard attached at delivery time.
+enum InteractionType {
+  none
+  poll
+  question
+}
+
 /// One send event. `sendKey` is the idempotency gate: unique per Source, so a
 /// retried POST /broadcasts with the same key returns the existing Broadcast
 /// instead of double-sending. Audit fields (createdBy/notificationId/targets/
@@ -283,6 +300,11 @@ model Broadcast {
   placeholderValues Json
   createdBy         String // audit: which principal initiated the send
 
+  // Two-way interaction (optional). `none` for a plain send; `poll` carries 2–4
+  // labels in pollOptions; `question` invites a free-text reply.
+  interaction InteractionType @default(none)
+  pollOptions String[]        @default([])
+
   totalCount   Int @default(0)
   sentCount    Int @default(0)
   failedCount  Int @default(0)
@@ -293,6 +315,7 @@ model Broadcast {
 
   targets    BroadcastTarget[]
   recipients BroadcastRecipient[]
+  responses  BroadcastResponse[]
 
   @@index([sourceId])
   @@map("broadcasts")
@@ -325,4 +348,29 @@ model BroadcastRecipient {
   @@unique([broadcastId, subscriberId])
   @@index([broadcastId])
   @@map("broadcast_recipients")
+}
+
+/// A subscriber's reply to an interactive broadcast. `optionIndex` is set for a
+/// poll vote (index into Broadcast.pollOptions), `text` for a question answer.
+/// Unique per (broadcast, subscriber) so a re-vote / re-answer upserts — latest
+/// wins. Source-scoped like everything else.
+model BroadcastResponse {
+  id           String     @id @default(cuid())
+  sourceId     String
+  source       Source     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  broadcastId  String
+  broadcast    Broadcast  @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  optionIndex Int? // set for poll votes
+  text        String? // set for question answers
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([broadcastId, subscriberId])
+  @@index([sourceId])
+  @@index([broadcastId])
+  @@map("broadcast_responses")
 }

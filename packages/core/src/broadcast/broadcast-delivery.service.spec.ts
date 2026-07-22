@@ -66,7 +66,9 @@ describe('BroadcastDeliveryService', () => {
 
     const outcome = await svc.processRecipient('b1', 'r1');
     expect(outcome).toBe('sent');
-    expect(telegram.sendText).toHaveBeenCalledWith(555, 'Hi Ada');
+    expect(telegram.sendText).toHaveBeenCalledWith(555, 'Hi Ada', {
+      keyboard: undefined,
+    });
     expect(recipient.status).toBe('sent');
     expect(broadcast.sentCount).toBe(1);
     expect(broadcast.status).toBe('completed'); // no queued left

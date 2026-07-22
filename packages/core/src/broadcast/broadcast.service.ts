@@ -7,6 +7,7 @@ import type {
 import {
   type Broadcast,
   BroadcastStatus,
+  InteractionType,
   Prisma,
   PrismaService,
   SubscriberStatus,
@@ -17,7 +18,14 @@ import { resolveSendTargets } from './send-validation';
 
 type BroadcastWithTargets = Broadcast & {
   targets: { groupId: string }[];
+  _count?: { responses: number };
 };
+
+/** Every read includes targets (for groupIds) + a responses count (for views). */
+const VIEW_INCLUDE = {
+  targets: true,
+  _count: { select: { responses: true } },
+} as const;
 
 /**
  * Broadcast orchestration. `create` is the one Source action; it validates the
@@ -45,7 +53,7 @@ export class BroadcastService {
     // Idempotency: same key → return the existing broadcast, do not re-enqueue.
     const existing = await this.prisma.broadcast.findUnique({
       where: { sendKey: scopedKey },
-      include: { targets: true },
+      include: VIEW_INCLUDE,
     });
     if (existing) return this.toView(existing);
 
@@ -75,6 +83,8 @@ export class BroadcastService {
           sendKey: scopedKey,
           placeholderValues: input.placeholderValues as Prisma.InputJsonValue,
           createdBy,
+          interaction: input.interaction?.type ?? InteractionType.none,
+          pollOptions: input.interaction?.options ?? [],
           totalCount: subscribers.length,
           status: subscribers.length
             ? BroadcastStatus.queued
@@ -85,7 +95,7 @@ export class BroadcastService {
             create: subscribers.map((s) => ({ subscriberId: s.id })),
           },
         },
-        include: { targets: true },
+        include: VIEW_INCLUDE,
       });
     } catch (err) {
       // Lost a race on the unique sendKey → return the winner (still idempotent).
@@ -95,7 +105,7 @@ export class BroadcastService {
       ) {
         const winner = await this.prisma.broadcast.findUnique({
           where: { sendKey: scopedKey },
-          include: { targets: true },
+          include: VIEW_INCLUDE,
         });
         if (winner) return this.toView(winner);
       }
@@ -125,7 +135,7 @@ export class BroadcastService {
   async list(sourceId: string): Promise<BroadcastView[]> {
     const rows = await this.prisma.broadcast.findMany({
       where: { sourceId },
-      include: { targets: true },
+      include: VIEW_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((b) => this.toView(b));
@@ -134,7 +144,7 @@ export class BroadcastService {
   async get(sourceId: string, id: string): Promise<BroadcastDetail> {
     const b = await this.prisma.broadcast.findFirst({
       where: { id, sourceId },
-      include: { targets: true, recipients: true },
+      include: { ...VIEW_INCLUDE, recipients: true },
     });
     if (!b) throw new NotFoundException('Broadcast not found');
     return {
@@ -201,6 +211,8 @@ export class BroadcastService {
       notificationId: b.notificationId,
       status: b.status,
       groupIds: b.targets.map((t) => t.groupId),
+      interaction: { type: b.interaction, options: b.pollOptions },
+      responseCount: b._count?.responses ?? 0,
       createdBy: b.createdBy,
       totalCount: b.totalCount,
       sentCount: b.sentCount,

@@ -7,6 +7,7 @@ import { BroadcastModule } from './broadcast/broadcast.module';
 import { GroupModule } from './group/group.module';
 import { InviteModule } from './invite/invite.module';
 import { NotificationModule } from './notification/notification.module';
+import { ResponseModule } from './response/response.module';
 import { ScheduleModule } from './schedule/schedule.module';
 import { SourceModule } from './source/source.module';
 import { SubscriberModule } from './subscriber/subscriber.module';
@@ -27,6 +28,7 @@ import { SubscriberModule } from './subscriber/subscriber.module';
     GroupModule,
     InviteModule,
     BroadcastModule,
+    ResponseModule,
     ScheduleModule,
     AuditModule,
   ],
@@ -38,6 +40,7 @@ import { SubscriberModule } from './subscriber/subscriber.module';
     GroupModule,
     InviteModule,
     BroadcastModule,
+    ResponseModule,
     ScheduleModule,
     AuditModule,
   ],

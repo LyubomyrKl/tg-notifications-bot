@@ -6,6 +6,7 @@ import { type AuditLog, Prisma, PrismaService } from '@paedavic/database';
 export const AuditAction = {
   BroadcastCreated: 'broadcast.created',
   SubscriberUnsubscribed: 'subscriber.unsubscribed',
+  ResponseReceived: 'response.received',
 } as const;
 
 /**

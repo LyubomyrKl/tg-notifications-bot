@@ -16,6 +16,14 @@ export { BroadcastService } from './broadcast/broadcast.service';
 export { BroadcastDeliveryService } from './broadcast/broadcast-delivery.service';
 export type { DeliveryOutcome } from './broadcast/broadcast-delivery.service';
 export { BroadcastConsumer } from './broadcast/broadcast.consumer';
+export {
+  buildInteractionKeyboard,
+  RESPONSE_CALLBACK,
+  voteCallback,
+  answerCallback,
+} from './broadcast/interaction-keyboard';
+export { ResponseModule } from './response/response.module';
+export { ResponseService } from './response/response.service';
 export { ScheduleModule } from './schedule/schedule.module';
 export { ScheduleService } from './schedule/schedule.service';
 export { ScheduleConsumer } from './schedule/schedule.consumer';

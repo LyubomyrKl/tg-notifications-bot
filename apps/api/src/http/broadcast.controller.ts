@@ -8,10 +8,15 @@ import {
 } from '@nestjs/common';
 import {
   type BroadcastDetail,
+  type BroadcastResponses,
   type BroadcastView,
   CreateBroadcastInput,
 } from '@paedavic/contracts';
-import { type AuthPrincipal, BroadcastService } from '@paedavic/core';
+import {
+  type AuthPrincipal,
+  BroadcastService,
+  ResponseService,
+} from '@paedavic/core';
 import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { CurrentPrincipal } from '../common/current-principal.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
@@ -19,7 +24,10 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 @Controller('broadcasts')
 @UseGuards(BearerAuthGuard)
 export class BroadcastController {
-  constructor(private readonly broadcasts: BroadcastService) {}
+  constructor(
+    private readonly broadcasts: BroadcastService,
+    private readonly responses: ResponseService,
+  ) {}
 
   /** Queue a send. Idempotent on sendKey; rejects unfilled placeholders (400). */
   @Post()
@@ -44,5 +52,14 @@ export class BroadcastController {
     @Param('id') id: string,
   ): Promise<BroadcastDetail> {
     return this.broadcasts.get(p.sourceId, id);
+  }
+
+  /** Collected poll votes / free-text answers for an interactive broadcast. */
+  @Get(':id/responses')
+  responsesFor(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('id') id: string,
+  ): Promise<BroadcastResponses> {
+    return this.responses.list(p.sourceId, id);
   }
 }

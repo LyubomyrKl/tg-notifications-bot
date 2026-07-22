@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { CreateBroadcastInput } from '@paedavic/contracts';
 import { UnfilledPlaceholdersError } from '../notification/placeholder.util';
 import { BroadcastService } from './broadcast.service';
 
@@ -210,5 +211,60 @@ describe('BroadcastService.create', () => {
         sendKey: 'k1',
       }, 'user_1'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('persists a poll interaction + options; defaults to none otherwise', async () => {
+    const fake = makeFakePrisma();
+    const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
+
+    const poll = await svc.create('src_A', {
+      notificationId: 'n1',
+      groupIds: ['g_all'],
+      subscriberIds: [],
+      placeholderValues: { name: 'Ada' },
+      interaction: { type: 'poll', options: ['Yes', 'No'] },
+      sendKey: 'k_poll',
+    }, 'user_1');
+    expect(poll.interaction).toEqual({ type: 'poll', options: ['Yes', 'No'] });
+    expect(poll.responseCount).toBe(0);
+
+    const plain = await svc.create('src_A', {
+      notificationId: 'n1',
+      groupIds: ['g_all'],
+      subscriberIds: [],
+      placeholderValues: { name: 'Ada' },
+      sendKey: 'k_plain',
+    }, 'user_1');
+    expect(plain.interaction).toEqual({ type: 'none', options: [] });
+  });
+});
+
+describe('CreateBroadcastInput interaction validation', () => {
+  it('requires 2–4 options for a poll and none for a question', () => {
+    const base = { notificationId: 'n1', groupIds: ['g'], sendKey: 'k' };
+    expect(
+      CreateBroadcastInput.safeParse({
+        ...base,
+        interaction: { type: 'poll', options: ['Yes'] },
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateBroadcastInput.safeParse({
+        ...base,
+        interaction: { type: 'question', options: ['nope'] },
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateBroadcastInput.safeParse({
+        ...base,
+        interaction: { type: 'poll', options: ['Yes', 'No'] },
+      }).success,
+    ).toBe(true);
+    expect(
+      CreateBroadcastInput.safeParse({
+        ...base,
+        interaction: { type: 'question' },
+      }).success,
+    ).toBe(true);
   });
 });

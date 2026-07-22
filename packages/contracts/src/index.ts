@@ -164,6 +164,20 @@ export const InviteLinkDetail = InviteLinkView.extend({
 export type InviteLinkDetail = z.infer<typeof InviteLinkDetail>;
 
 // ── Broadcasts ──────────────────────────────────────────────────────────────
+
+/** Optional two-way interaction attached to a send. A poll needs 2–4 option
+ *  labels; a question needs none (it invites a free-text reply). */
+export const BroadcastInteractionInput = z
+  .object({
+    type: z.enum(['poll', 'question']),
+    options: z.array(z.string().min(1).max(64)).max(4).default([]),
+  })
+  .refine(
+    (v) => (v.type === 'question' ? v.options.length === 0 : v.options.length >= 2),
+    { message: 'A poll needs 2–4 options; a question needs none', path: ['options'] },
+  );
+export type BroadcastInteractionInput = z.infer<typeof BroadcastInteractionInput>;
+
 export const CreateBroadcastInput = z
   .object({
     notificationId: z.string().min(1),
@@ -173,6 +187,8 @@ export const CreateBroadcastInput = z
     // with the group recipients.
     subscriberIds: z.array(z.string().min(1)).default([]),
     placeholderValues: z.record(z.string()).default({}),
+    // Optional poll/question the recipients can respond to.
+    interaction: BroadcastInteractionInput.optional(),
     // Caller-supplied idempotency key — a retried send with the same key is a no-op.
     sendKey: z.string().min(1).max(200),
   })
@@ -182,11 +198,20 @@ export const CreateBroadcastInput = z
   });
 export type CreateBroadcastInput = z.infer<typeof CreateBroadcastInput>;
 
+/** How a broadcast asks for a response, as returned by the API. */
+export const InteractionView = z.object({
+  type: z.enum(['none', 'poll', 'question']),
+  options: z.array(z.string()),
+});
+export type InteractionView = z.infer<typeof InteractionView>;
+
 export const BroadcastView = z.object({
   id: z.string(),
   notificationId: z.string(),
   status: z.enum(['queued', 'sending', 'completed', 'failed']),
   groupIds: z.array(z.string()),
+  interaction: InteractionView,
+  responseCount: z.number().int().nonnegative(),
   createdBy: z.string(),
   totalCount: z.number().int().nonnegative(),
   sentCount: z.number().int().nonnegative(),
@@ -209,6 +234,35 @@ export const BroadcastDetail = BroadcastView.extend({
   recipients: z.array(RecipientView),
 });
 export type BroadcastDetail = z.infer<typeof BroadcastDetail>;
+
+/** One subscriber's response to an interactive broadcast. */
+export const BroadcastResponseView = z.object({
+  id: z.string(),
+  subscriberId: z.string(),
+  telegramUserId: z.string(),
+  username: z.string().nullable(),
+  optionIndex: z.number().int().nullable(),
+  text: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type BroadcastResponseView = z.infer<typeof BroadcastResponseView>;
+
+/** Vote count for one poll option. */
+export const PollTally = z.object({
+  optionIndex: z.number().int(),
+  label: z.string(),
+  count: z.number().int().nonnegative(),
+});
+export type PollTally = z.infer<typeof PollTally>;
+
+/** The full response picture for a broadcast: its interaction config, every
+ *  individual response, and (for polls) per-option tallies. */
+export const BroadcastResponses = z.object({
+  interaction: InteractionView,
+  responses: z.array(BroadcastResponseView),
+  tallies: z.array(PollTally),
+});
+export type BroadcastResponses = z.infer<typeof BroadcastResponses>;
 
 // ── Scheduled broadcasts ────────────────────────────────────────────────────
 export const RepeatKind = z.enum(['none', 'daily', 'weekly']);
