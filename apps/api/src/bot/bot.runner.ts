@@ -194,11 +194,9 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       );
     }
     // Command menu is role-scoped: the default scope is EMPTY (consumers see no
-    // commands), and each linked owner gets the admin menu scoped to their chat.
+    // commands + no command button), and each linked owner gets the admin menu
+    // scoped to their own chat. (Menu buttons are set inside applyCommandScopes.)
     void this.applyCommandScopes();
-    void this.telegram.bot.api
-      .setChatMenuButton({ menu_button: { type: 'commands' } })
-      .catch(() => undefined);
 
     // grammY long-polls in the background; do not await (resolves on stop).
     // Catch startup failures (e.g. a bad TELEGRAM_BOT_TOKEN → 401) so they log
@@ -235,19 +233,34 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
    */
   private async applyCommandScopes(): Promise<void> {
     const api = this.telegram.bot.api;
+    // Non-owners see NOTHING: clear the command list at both fall-through scopes
+    // (default + all private chats), and reset the menu button to default so there's
+    // no command affordance when the list is empty.
     await api.setMyCommands([], { scope: { type: 'default' } }).catch(() => undefined);
+    await api
+      .setMyCommands([], { scope: { type: 'all_private_chats' } })
+      .catch(() => undefined);
+    await api
+      .setChatMenuButton({ menu_button: { type: 'default' } })
+      .catch(() => undefined);
+    // Owners get the admin menu scoped to their own chat (chat scope wins).
     const owners = await this.sources
       .listLinkedTelegramIds()
       .catch(() => [] as bigint[]);
     for (const id of owners) await this.applyOwnerCommands(Number(id));
+    this.logger.log(
+      `command scopes applied — default empty, ${owners.length} owner(s) scoped`,
+    );
   }
 
-  /** Give one owner's private chat the full admin command menu. */
+  /** Give one owner's private chat the full admin command menu + command button. */
   private async applyOwnerCommands(chatId: number): Promise<void> {
-    await this.telegram.bot.api
-      .setMyCommands(this.ownerCommands(), {
-        scope: { type: 'chat', chat_id: chatId },
-      })
+    const api = this.telegram.bot.api;
+    await api
+      .setMyCommands(this.ownerCommands(), { scope: { type: 'chat', chat_id: chatId } })
+      .catch(() => undefined);
+    await api
+      .setChatMenuButton({ chat_id: chatId, menu_button: { type: 'commands' } })
       .catch(() => undefined);
   }
 
