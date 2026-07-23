@@ -50,6 +50,22 @@ export class SubscriberService {
   }
 
   /**
+   * The workspaces a Telegram user is an ACTIVE subscriber of (with names). Lets
+   * the bot tell a plain consumer apart from a stranger and greet them by
+   * workspace. Empty array → not subscribed to anything.
+   */
+  async activeSubscriptionsByTelegramId(
+    telegramUserId: bigint,
+  ): Promise<{ sourceName: string }[]> {
+    const rows = await this.prisma.subscriber.findMany({
+      where: { telegramUserId, status: SubscriberStatus.active },
+      select: { source: { select: { name: true } } },
+      orderBy: { joinedAt: 'desc' },
+    });
+    return rows.map((r) => ({ sourceName: r.source.name }));
+  }
+
+  /**
    * Consent exit for the bot `/stop`: unsubscribe this Telegram user from EVERY
    * workspace they belong to, and flag for deletion. Active-only targeting then
    * excludes them everywhere. Returns the number of workspaces affected.

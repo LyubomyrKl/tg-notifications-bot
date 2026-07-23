@@ -138,8 +138,19 @@ export class AdminMenu {
     await this.sch(ctx, p, 'list', '');
   }
 
-  /** /help → a short, friendly explainer (works for owners and subscribers). */
+  /** /help → role-aware: owners see the admin explainer; consumers/strangers get
+   *  the reader card / connect prompt (no admin commands to explain to them). */
   private async openHelp(ctx: Context): Promise<void> {
+    const tgId = ctx.from ? BigInt(ctx.from.id) : null;
+    const isOwner = tgId
+      ? !!(await this.sources.resolveByTelegramId(tgId))
+      : false;
+    if (!isOwner) {
+      if (tgId) return void (await this.replyNonOwner(ctx, tgId));
+      return void (await ctx.reply(
+        '👋 Open a workspace invite or start link to get connected.',
+      ));
+    }
     await ctx.reply(
       [
         '<b>Paedavic bot</b>',
@@ -1133,10 +1144,42 @@ export class AdminMenu {
   private async onText(ctx: Context): Promise<void> {
     const text = ctx.message?.text ?? '';
     if (text.startsWith('/')) return; // commands handled elsewhere
+    // Owner's stray message opens the menu; requireOwner handles the non-owner
+    // reply (reader card for subscribers, connect prompt for strangers).
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
-    // Guided input is owned by conversations; a stray message just opens the menu.
     await this.openHome(ctx, false);
+  }
+
+  /**
+   * Shared "you're a reader" copy for consumers — no admin commands. Public so
+   * {@link BotRunner} can reuse it for the `/start` welcome and keep the wording
+   * identical to what this menu shows on stray input / help.
+   */
+  consumerMessage(sourceNames: string[]): string {
+    const where = sourceNames.length
+      ? ` to <b>${sourceNames.map(esc).join(', ')}</b>`
+      : '';
+    return (
+      `📬 <b>You're subscribed${where}.</b>\n\n` +
+      `Updates arrive right here — there's nothing to manage and no commands to run. ` +
+      `When a message asks for a response, just tap its buttons.\n\n` +
+      `Send /stop anytime to unsubscribe.`
+    );
+  }
+
+  /** Reply to a non-owner: reader card if subscribed, else a connect prompt. */
+  private async replyNonOwner(ctx: Context, tgId: bigint): Promise<void> {
+    const subs = await this.subscribers.activeSubscriptionsByTelegramId(tgId);
+    if (subs.length) {
+      await ctx.reply(this.consumerMessage(subs.map((s) => s.sourceName)), {
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+    await ctx.reply(
+      "👋 You're not connected yet. Open a workspace invite or start link to begin.",
+    );
   }
 
   // ── Conversations (guided multi-step input) ────────────────────────────────
@@ -1781,13 +1824,12 @@ export class AdminMenu {
 
   private async requireOwner(ctx: Context): Promise<AuthPrincipal | null> {
     if (!ctx.from) return null;
-    const principal = await this.sources.resolveByTelegramId(BigInt(ctx.from.id));
+    const tgId = BigInt(ctx.from.id);
+    const principal = await this.sources.resolveByTelegramId(tgId);
     if (!principal) {
-      await ctx
-        .reply(
-          "👋 You're not connected to a workspace yet.\nOpen your start link to begin, or tap /help.",
-        )
-        .catch(() => undefined);
+      // Not an owner: a subscriber gets the reader card, a stranger the connect
+      // prompt — never the misleading "not connected" when they ARE subscribed.
+      await this.replyNonOwner(ctx, tgId).catch(() => undefined);
       return null;
     }
     return principal;

@@ -102,6 +102,21 @@ export class SourceService {
     });
   }
 
+  /**
+   * Telegram ids of every linked, active workspace owner. The bot uses this on
+   * boot to restore each owner's chat-scoped command menu (the default scope is
+   * empty, so consumers see no commands).
+   */
+  async listLinkedTelegramIds(): Promise<bigint[]> {
+    const rows = await this.prisma.source.findMany({
+      where: { telegramUserId: { not: null }, archivedAt: null },
+      select: { telegramUserId: true },
+    });
+    return rows
+      .map((r) => r.telegramUserId)
+      .filter((id): id is bigint => id !== null);
+  }
+
   // ── Resolution: identity → tenant-scoped principal ────────────────────────
 
   async resolveByApiKey(rawKey: string): Promise<AuthPrincipal | null> {

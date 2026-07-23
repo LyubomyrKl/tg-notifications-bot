@@ -52,16 +52,11 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     // the user's input ahead of the command/callback routes below.
     this.adminMenu.installConversations(bot);
 
-    // /start <token> — provision-link a workspace, or generic welcome.
+    // /start <token> — provision-link a workspace, or a role-aware welcome.
     bot.command('start', async (ctx) => {
       const token = ctx.match?.trim();
       if (!token) {
-        // No payload: linked owners get the menu; everyone else, a welcome.
-        const linked = ctx.from
-          ? await this.sources.resolveByTelegramId(BigInt(ctx.from.id))
-          : null;
-        if (linked) await this.adminMenu.openHome(ctx, false);
-        else await ctx.reply('Welcome to Paedavic. Open a workspace start link to connect.');
+        await this.welcome(ctx);
         return;
       }
       await this.handleStart(ctx, token);
@@ -87,6 +82,31 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     bot.catch((err) => {
       this.logger.error(`Unhandled bot error: ${err.error}`);
     });
+  }
+
+  /**
+   * Bare `/start` (no token). Role-aware so nobody sees the wrong thing:
+   * owner → the admin menu; active subscriber → the reader card (no commands);
+   * stranger → a connect prompt.
+   */
+  private async welcome(ctx: Context): Promise<void> {
+    if (!ctx.from) {
+      await ctx.reply('👋 Open a workspace invite or start link to get connected.');
+      return;
+    }
+    const tgId = BigInt(ctx.from.id);
+    if (await this.sources.resolveByTelegramId(tgId)) {
+      await this.adminMenu.openHome(ctx, false);
+      return;
+    }
+    const subs = await this.subscribers.activeSubscriptionsByTelegramId(tgId);
+    if (subs.length) {
+      await ctx.reply(this.adminMenu.consumerMessage(subs.map((s) => s.sourceName)), {
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+    await ctx.reply('👋 Open a workspace invite or start link to get connected.');
   }
 
   /**
@@ -116,6 +136,8 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     try {
       const source = await this.sources.linkTelegram(token, telegramUserId);
       await ctx.reply(`✅ Connected to workspace "${source.name}".`);
+      // Reveal the admin command menu for this owner's chat (default scope is empty).
+      await this.applyOwnerCommands(Number(telegramUserId));
       await this.adminMenu.openHome(ctx, false); // drop straight into the menu
       return;
     } catch (err) {
@@ -143,10 +165,12 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         ctx.from?.username,
       );
       const group = result.groupName ? ` and added to "${result.groupName}"` : '';
+      const headline = result.alreadyJoined
+        ? `👋 You're already subscribed to "${result.sourceName}".`
+        : `🎉 Subscribed to "${result.sourceName}"${group}.`;
       await ctx.reply(
-        result.alreadyJoined
-          ? `👋 You're already subscribed to "${result.sourceName}".`
-          : `🎉 Subscribed to "${result.sourceName}"${group}.`,
+        `${headline}\n\nUpdates arrive right here — no commands needed. Tap the ` +
+          'buttons on messages to respond, or send /stop anytime to leave.',
       );
     } catch (err) {
       if (
@@ -169,16 +193,9 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
         'TELEGRAM_MODE=webhook is not wired yet; falling back to polling.',
       );
     }
-    // Show suggested commands in the Telegram UI (the "/" menu) + the menu button.
-    // start/stop are owned here; the middle comes from the menu's single source
-    // of truth so the "/" list can never drift from the registered handlers.
-    void this.telegram.bot.api
-      .setMyCommands([
-        { command: 'start', description: 'Connect or open your workspace' },
-        ...this.adminMenu.menuCommands(),
-        { command: 'stop', description: 'Unsubscribe' },
-      ])
-      .catch(() => undefined);
+    // Command menu is role-scoped: the default scope is EMPTY (consumers see no
+    // commands), and each linked owner gets the admin menu scoped to their chat.
+    void this.applyCommandScopes();
     void this.telegram.bot.api
       .setChatMenuButton({ menu_button: { type: 'commands' } })
       .catch(() => undefined);
@@ -197,6 +214,41 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
           `Bot failed to start — check TELEGRAM_BOT_TOKEN. ${(err as Error).message}`,
         ),
       );
+  }
+
+  /**
+   * The admin "/" menu — shown ONLY to owners (chat-scoped). The middle comes
+   * from the menu's single source of truth so it can't drift from the handlers.
+   */
+  private ownerCommands(): { command: string; description: string }[] {
+    return [
+      { command: 'start', description: 'Open your workspace' },
+      ...this.adminMenu.menuCommands(),
+      { command: 'stop', description: 'Unsubscribe' },
+    ];
+  }
+
+  /**
+   * Default scope = no commands (consumers/strangers); every linked owner gets
+   * the admin menu scoped to their chat. Run on boot so already-linked owners
+   * keep their menu across restarts. Best-effort — never blocks startup.
+   */
+  private async applyCommandScopes(): Promise<void> {
+    const api = this.telegram.bot.api;
+    await api.setMyCommands([], { scope: { type: 'default' } }).catch(() => undefined);
+    const owners = await this.sources
+      .listLinkedTelegramIds()
+      .catch(() => [] as bigint[]);
+    for (const id of owners) await this.applyOwnerCommands(Number(id));
+  }
+
+  /** Give one owner's private chat the full admin command menu. */
+  private async applyOwnerCommands(chatId: number): Promise<void> {
+    await this.telegram.bot.api
+      .setMyCommands(this.ownerCommands(), {
+        scope: { type: 'chat', chat_id: chatId },
+      })
+      .catch(() => undefined);
   }
 
   async onModuleDestroy(): Promise<void> {
