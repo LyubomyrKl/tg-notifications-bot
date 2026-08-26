@@ -20,17 +20,68 @@ export class SubscriberService {
     private readonly audit: AuditService,
   ) {}
 
-  /** Idempotently create-or-refresh a subscriber for a workspace. */
+  /**
+   * Idempotently create-or-refresh a subscriber for a workspace. `username` and
+   * `name` come from Telegram and are refreshed when provided; the admin-set
+   * `customName` is never touched here.
+   */
   async upsert(
     sourceId: string,
     telegramUserId: bigint,
     username?: string,
+    name?: string,
   ): Promise<Subscriber> {
     return this.prisma.subscriber.upsert({
       where: { sourceId_telegramUserId: { sourceId, telegramUserId } },
-      create: { sourceId, telegramUserId, username: username ?? null },
-      update: username !== undefined ? { username } : {},
+      create: {
+        sourceId,
+        telegramUserId,
+        username: username ?? null,
+        name: name ?? null,
+      },
+      update: {
+        ...(username !== undefined && { username }),
+        ...(name !== undefined && { name }),
+      },
     });
+  }
+
+  /**
+   * Refresh the Telegram-side identity (username + profile name) of EVERY
+   * subscriber row for this Telegram user, across workspaces. Called
+   * opportunistically when a subscriber interacts with the bot, so people who
+   * joined before names were captured get backfilled. Best-effort by design.
+   */
+  async refreshIdentity(
+    telegramUserId: bigint,
+    username: string | undefined,
+    name: string | undefined,
+  ): Promise<void> {
+    if (username === undefined && name === undefined) return;
+    await this.prisma.subscriber.updateMany({
+      where: { telegramUserId },
+      data: {
+        ...(username !== undefined && { username }),
+        ...(name !== undefined && { name }),
+      },
+    });
+  }
+
+  /** Admin display override; `customName: null` reverts to the Telegram name. */
+  async rename(
+    sourceId: string,
+    subscriberId: string,
+    customName: string | null,
+  ): Promise<SubscriberView> {
+    const existing = await this.prisma.subscriber.findFirst({
+      where: { id: subscriberId, sourceId },
+    });
+    if (!existing) throw new NotFoundException('Subscriber not found');
+    const updated = await this.prisma.subscriber.update({
+      where: { id: subscriberId },
+      data: { customName: customName?.trim() || null },
+    });
+    return this.toView(updated);
   }
 
   async list(
@@ -129,8 +180,25 @@ export class SubscriberService {
       id: s.id,
       telegramUserId: s.telegramUserId.toString(),
       username: s.username,
+      name: s.name,
+      customName: s.customName,
+      displayName: subscriberDisplayName(s),
       status: s.status,
       joinedAt: s.joinedAt.toISOString(),
     };
   }
+}
+
+/**
+ * The one label to show for a subscriber, everywhere: admin override first,
+ * then the Telegram profile name, then @username, then the raw Telegram id.
+ */
+export function subscriberDisplayName(
+  s: Pick<Subscriber, 'customName' | 'name' | 'username' | 'telegramUserId'>,
+): string {
+  return (
+    s.customName?.trim() ||
+    s.name?.trim() ||
+    (s.username ? `@${s.username}` : s.telegramUserId.toString())
+  );
 }

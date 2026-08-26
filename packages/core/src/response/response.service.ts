@@ -14,6 +14,7 @@ import {
 } from '@paedavic/database';
 import { TelegramService } from '@paedavic/telegram';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { subscriberDisplayName } from '../subscriber/subscriber.service';
 
 /**
  * Inbound side of two-way broadcasts: records a subscriber's poll vote or
@@ -125,6 +126,7 @@ export class ResponseService {
         subscriberId: r.subscriberId,
         telegramUserId: r.subscriber.telegramUserId.toString(),
         username: r.subscriber.username,
+        displayName: subscriberDisplayName(r.subscriber),
         optionIndex: r.optionIndex,
         text: r.text,
         createdAt: r.createdAt.toISOString(),
@@ -180,9 +182,7 @@ export class ResponseService {
       where: { id: broadcast.notificationId },
       select: { name: true },
     });
-    const who = subscriber.username
-      ? `@${subscriber.username}`
-      : `#${subscriber.telegramUserId}`;
+    const who = subscriberDisplayName(subscriber);
     const on = notification ? ` on "${notification.name}"` : '';
     await this.pingOwner(broadcast.sourceId, `📥 ${who} ${what}${on}`);
   }

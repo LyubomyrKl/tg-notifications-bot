@@ -78,6 +78,7 @@ export class InviteService {
         notificationId: input.notificationId ?? null,
         expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
       },
+      include: { group: { select: { name: true } } },
     });
     return this.toView(link);
   }
@@ -86,6 +87,7 @@ export class InviteService {
     const links = await this.prisma.inviteLink.findMany({
       where: { sourceId },
       orderBy: { createdAt: 'desc' },
+      include: { group: { select: { name: true } } },
     });
     return links.map((l) => this.toView(l));
   }
@@ -94,6 +96,7 @@ export class InviteService {
     const link = await this.prisma.inviteLink.findFirst({
       where: { id, sourceId },
       include: {
+        group: { select: { name: true } },
         joins: {
           include: { subscriber: true },
           orderBy: { joinedAt: 'desc' },
@@ -115,12 +118,14 @@ export class InviteService {
   async revoke(sourceId: string, id: string): Promise<InviteLinkView> {
     const link = await this.prisma.inviteLink.findFirst({
       where: { id, sourceId },
+      include: { group: { select: { name: true } } },
     });
     if (!link) throw new NotFoundException('Invite link not found');
     if (link.revokedAt) return this.toView(link); // idempotent
     const updated = await this.prisma.inviteLink.update({
       where: { id },
       data: { revokedAt: new Date() },
+      include: { group: { select: { name: true } } },
     });
     return this.toView(updated);
   }
@@ -135,7 +140,7 @@ export class InviteService {
   async open(
     token: string,
     telegramUserId: bigint,
-    username: string | undefined,
+    identity: { username?: string; name?: string },
     now: Date = new Date(),
   ): Promise<InviteOpenResult> {
     const link = await this.prisma.inviteLink.findUnique({
@@ -153,7 +158,8 @@ export class InviteService {
     const subscriber = await this.subscribers.upsert(
       link.sourceId,
       telegramUserId,
-      username,
+      identity.username,
+      identity.name,
     );
     if (subscriber.status !== SubscriberStatus.active) {
       await this.prisma.subscriber.update({
@@ -208,13 +214,16 @@ export class InviteService {
     };
   }
 
-  private toView(link: InviteLink): InviteLinkView {
+  private toView(
+    link: InviteLink & { group?: { name: string } | null },
+  ): InviteLinkView {
     const active = !link.revokedAt && (!link.expiresAt || link.expiresAt > new Date());
     return {
       id: link.id,
       url: this.telegram.buildStartLink(link.token),
       token: link.token,
       groupId: link.groupId,
+      groupName: link.group?.name ?? null,
       notificationId: link.notificationId,
       expiresAt: link.expiresAt?.toISOString() ?? null,
       revokedAt: link.revokedAt?.toISOString() ?? null,

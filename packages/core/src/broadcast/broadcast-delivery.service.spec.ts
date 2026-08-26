@@ -24,6 +24,7 @@ function setup(opts: {
     sentCount: 0,
     failedCount: 0,
     blockedCount: 0,
+    targets: [],
   };
   const recipients = [recipient];
 
@@ -31,6 +32,10 @@ function setup(opts: {
     broadcastRecipient: {
       findUnique: async ({ where }: any) =>
         recipients.find((r) => r.id === where.id) ?? null,
+      findMany: async ({ where }: any) =>
+        recipients.filter((r) =>
+          where.status?.not ? r.status !== where.status.not : true,
+        ),
       update: async ({ where, data }: any) => {
         const r = recipients.find((x) => x.id === where.id)!;
         Object.assign(r, data);
@@ -48,6 +53,19 @@ function setup(opts: {
         if (data.completedAt) broadcast.completedAt = data.completedAt;
         return broadcast;
       },
+      updateMany: async ({ where, data }: any) => {
+        if (where.status?.not && broadcast.status === where.status.not) {
+          return { count: 0 };
+        }
+        Object.assign(broadcast, data);
+        return { count: 1 };
+      },
+      findUnique: async () => ({
+        ...broadcast,
+        totalCount: recipients.length,
+        notification: { name: 'Promo' },
+        source: { telegramUserId: 42n },
+      }),
     },
     notification: {
       findUnique: async () => ({ id: 'n1', body: 'Hi {name}' }),
@@ -55,7 +73,7 @@ function setup(opts: {
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
   };
 
-  return { prisma, recipient, broadcast };
+  return { prisma, recipient, recipients, broadcast };
 }
 
 describe('BroadcastDeliveryService', () => {
@@ -121,6 +139,74 @@ describe('BroadcastDeliveryService', () => {
     expect(telegram.sendText).not.toHaveBeenCalled();
     expect(recipient.status).toBe('failed');
     expect(broadcast.failedCount).toBe(1);
+  });
+
+  it('reports delivery to the owner, naming exactly who missed out', async () => {
+    const { prisma, recipient, recipients } = setup({});
+    recipients.push({
+      id: 'r2',
+      broadcastId: 'b1',
+      status: 'blocked',
+      error: 'bot was blocked by the user',
+      sentAt: null,
+      subscriber: {
+        telegramUserId: 777n,
+        status: 'active',
+        name: 'Оля',
+        username: null,
+        customName: null,
+      },
+      broadcast: recipient.broadcast,
+    });
+    const telegram = { enabled: true, sendText: jest.fn().mockResolvedValue(undefined) };
+    const svc = new BroadcastDeliveryService(prisma, telegram as any);
+
+    // r1 delivers; r2 is already terminal → the broadcast completes here.
+    await svc.processRecipient('b1', 'r1');
+    const report = telegram.sendText.mock.calls.at(-1)!;
+    expect(report[0]).toBe(42); // the owner's chat, not a subscriber
+    expect(report[1]).toContain('→ 555, Оля'); // direct sends name the audience
+    expect(report[1]).toContain('Delivered to 1 of 2');
+    expect(report[1]).toContain('Оля — blocked the bot');
+
+    // Re-processing a terminal recipient never re-reports (exactly-once).
+    const calls = telegram.sendText.mock.calls.length;
+    expect(await svc.processRecipient('b1', 'r1')).toBe('skipped');
+    expect(telegram.sendText.mock.calls.length).toBe(calls);
+  });
+
+  it('a group send reports the targeted group names', async () => {
+    const { prisma, recipient, recipients, broadcast } = setup({});
+    broadcast.targets = [
+      { group: { name: 'Potik-3' } },
+      { group: { name: 'VIP' } },
+    ];
+    recipients.push({
+      ...recipient,
+      id: 'r2',
+      status: 'sent',
+      subscriber: { telegramUserId: 777n, status: 'active' },
+    });
+    broadcast.sentCount = 1; // r2 was already counted
+    const telegram = { enabled: true, sendText: jest.fn().mockResolvedValue(undefined) };
+    const svc = new BroadcastDeliveryService(prisma, telegram as any);
+
+    await svc.processRecipient('b1', 'r1');
+    const report = telegram.sendText.mock.calls.at(-1)!;
+    expect(report[0]).toBe(42);
+    expect(report[1]).toBe('📬 "Promo" → Potik-3, VIP\nDelivered to all 2 ✅');
+  });
+
+  it('a fully delivered 1:1 send reports the recipient by name', async () => {
+    const { prisma, recipient } = setup({});
+    recipient.subscriber.name = 'Ada L.';
+    const telegram = { enabled: true, sendText: jest.fn().mockResolvedValue(undefined) };
+    const svc = new BroadcastDeliveryService(prisma, telegram as any);
+
+    await svc.processRecipient('b1', 'r1');
+    const report = telegram.sendText.mock.calls.at(-1)!;
+    expect(report[0]).toBe(42);
+    expect(report[1]).toBe('📬 "Promo" delivered to Ada L. ✅');
   });
 
   it('markExhausted records terminal failure (idempotent)', async () => {

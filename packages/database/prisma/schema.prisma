@@ -132,6 +132,12 @@ model Subscriber {
   source         Source           @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   telegramUserId BigInt
   username       String?
+  /// Telegram profile name (first + last), captured at join and refreshed on
+  /// later interactions. Display fallback when no customName is set.
+  name           String?
+  /// Admin-set display name. Wins over `name`/`username` everywhere; never
+  /// touched by automatic identity refreshes.
+  customName     String?
   status         SubscriberStatus @default(active)
   unsubscribedAt DateTime?
   pendingDelete  Boolean          @default(false)

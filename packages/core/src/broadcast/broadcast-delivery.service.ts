@@ -7,6 +7,7 @@ import {
 } from '@paedavic/database';
 import { TelegramSendError, TelegramService } from '@paedavic/telegram';
 import { renderTemplate } from '../notification/placeholder.util';
+import { subscriberDisplayName } from '../subscriber/subscriber.service';
 import { buildInteractionKeyboard } from './interaction-keyboard';
 
 export type DeliveryOutcome = 'sent' | 'blocked' | 'skipped' | 'unsubscribed';
@@ -142,11 +143,88 @@ export class BroadcastDeliveryService {
       where: { broadcastId, status: RecipientStatus.queued },
     });
     if (remaining === 0) {
-      await this.prisma.broadcast.update({
-        where: { id: broadcastId },
+      // Guarded transition: when two recipients finalize concurrently, exactly
+      // one worker wins the update — so the owner gets ONE delivery report.
+      const done = await this.prisma.broadcast.updateMany({
+        where: { id: broadcastId, status: { not: BroadcastStatus.completed } },
         data: { status: BroadcastStatus.completed, completedAt: new Date() },
       });
-      this.logger.log(`Broadcast ${broadcastId} completed`);
+      if (done.count > 0) {
+        this.logger.log(`Broadcast ${broadcastId} completed`);
+        await this.reportDelivery(broadcastId).catch((err) =>
+          this.logger.warn(
+            `Delivery report for ${broadcastId} failed: ${(err as Error).message}`,
+          ),
+        );
+      }
     }
   }
+
+  /**
+   * One message to the owner when a broadcast completes: a single ✅ line when
+   * everyone got it, otherwise exactly who missed out and why. Plain text (no
+   * parse_mode) so subscriber names need no escaping. Best-effort — a failed
+   * report never fails the delivery job.
+   */
+  private async reportDelivery(broadcastId: string): Promise<void> {
+    if (!this.telegram.enabled) return;
+    const broadcast = await this.prisma.broadcast.findUnique({
+      where: { id: broadcastId },
+      include: {
+        notification: { select: { name: true } },
+        source: { select: { telegramUserId: true } },
+        targets: { include: { group: { select: { name: true } } } },
+      },
+    });
+    if (!broadcast?.source?.telegramUserId || broadcast.totalCount === 0) return;
+
+    const recipients = await this.prisma.broadcastRecipient.findMany({
+      where: { broadcastId },
+      include: { subscriber: true },
+    });
+
+    const name = broadcast.notification?.name ?? 'message';
+    const { sentCount: delivered, totalCount: total } = broadcast;
+
+    // Audience label: targeted group names when groups were picked; otherwise
+    // the directly-picked people by name. Capped so the report stays skimmable.
+    const audienceNames = broadcast.targets.length
+      ? broadcast.targets
+          .map((t) => t.group?.name)
+          .filter((x): x is string => !!x)
+      : recipients.map((r) => subscriberDisplayName(r.subscriber));
+    const shownNames = audienceNames.slice(0, 3).join(', ');
+    const audience =
+      (audienceNames.length > 3
+        ? `${shownNames} +${audienceNames.length - 3} more`
+        : shownNames) || `${total} recipient${total === 1 ? '' : 's'}`;
+
+    let text: string;
+    if (delivered === total && total === 1) {
+      text = `📬 "${name}" delivered to ${audience} ✅`;
+    } else if (delivered === total) {
+      text = `📬 "${name}" → ${audience}\nDelivered to all ${total} ✅`;
+    } else {
+      const missed = recipients.filter((r) => r.status !== RecipientStatus.sent);
+      const shown = missed.slice(0, 10);
+      const lines = shown.map(
+        (r) => `• ${subscriberDisplayName(r.subscriber)} — ${missReason(r)}`,
+      );
+      const more = missed.length - shown.length;
+      text =
+        `📬 "${name}" → ${audience}\n` +
+        `Delivered to ${delivered} of ${total}\n` +
+        'Not delivered:\n' +
+        lines.join('\n') +
+        (more > 0 ? `\n…and ${more} more` : '');
+    }
+    await this.telegram.sendText(Number(broadcast.source.telegramUserId), text);
+  }
+}
+
+/** Human reason a recipient missed the send, from their terminal status. */
+function missReason(r: { status: RecipientStatus; error: string | null }): string {
+  if (r.status === RecipientStatus.blocked) return 'blocked the bot';
+  if (r.error?.includes('unsubscribed')) return 'unsubscribed';
+  return 'delivery failed';
 }

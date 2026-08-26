@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common';
 import type { NotificationView } from '@paedavic/contracts';
 import { conversations, createConversation } from '@grammyjs/conversations';
+import { profileName } from '@paedavic/telegram';
 import { type Bot, type Context, InlineKeyboard } from 'grammy';
 
 /** Shape Telegram's setMyCommands expects. */
@@ -85,6 +86,7 @@ export class AdminMenu {
     run: (ctx: Context) => Promise<void>;
   }> = [
     { command: 'menu', description: 'Open the main menu', run: (c) => this.openHome(c, false) },
+    { command: 'write', description: 'Write & send a message', run: (c) => this.openWrite(c) },
     { command: 'notifications', description: 'Message templates', run: (c) => this.openList(c, 'notif') },
     { command: 'groups', description: 'Subscriber groups', run: (c) => this.openList(c, 'grp') },
     { command: 'links', description: 'Invite links', run: (c) => this.openList(c, 'inv') },
@@ -124,6 +126,13 @@ export class AdminMenu {
     await this.bc(ctx, p, 'start', '');
   }
 
+  /** /write → jump straight into composing a free-form message (no template). */
+  private async openWrite(ctx: Context): Promise<void> {
+    const p = await this.requireOwner(ctx);
+    if (!p) return;
+    await this.bc(ctx, p, 'new', '');
+  }
+
   /** /subscribers → list subscribers. */
   private async openSubscribers(ctx: Context): Promise<void> {
     const p = await this.requireOwner(ctx);
@@ -156,6 +165,7 @@ export class AdminMenu {
         '<b>Paedavic bot</b>',
         '',
         'Manage your notification workspace right here:',
+        '✍️ /write — write &amp; send a message, no template needed',
         '📝 /notifications — create &amp; manage message templates',
         '👥 /groups — organize subscribers into segments',
         '🔗 /links — invite links that subscribe &amp; segment people',
@@ -224,6 +234,11 @@ export class AdminMenu {
   ): Promise<void> {
     const tgId = ctx.from?.id;
     if (!tgId) return;
+    // Opportunistic identity backfill: a tap gives us fresh profile data for
+    // subscribers who joined before names were captured. Fire-and-forget.
+    void this.subscribers
+      .refreshIdentity(BigInt(tgId), ctx.from?.username, profileName(ctx.from))
+      .catch(() => undefined);
     try {
       if (ns === 'rv') {
         const { label } = await this.responses.recordVote(
@@ -466,9 +481,8 @@ export class AdminMenu {
     const { slice, pg, pages } = this.paginate(all, page);
     const kb = new InlineKeyboard();
     slice.forEach((s) => {
-      const label = s.username ? `@${s.username}` : s.telegramUserId;
       kb.text(
-        `${memberIds.has(s.id) ? '✅' : '⬜'} ${label}`,
+        `${memberIds.has(s.id) ? '✅' : '⬜'} ${s.displayName}`,
         `grp:tog:${groupId}:${s.id}:${pg}`,
       ).row();
     });
@@ -493,14 +507,16 @@ export class AdminMenu {
       const items = await this.invites.list(p.sourceId);
       const { slice, pg, pages } = this.paginate(items, parseInt(id || '0', 10) || 0);
       const kb = new InlineKeyboard();
-      slice.forEach((l) =>
-        kb
-          .text(
-            `🔗 ${l.joinCount} joins${l.active ? '' : ' · revoked'}`,
-            `inv:view:${l.id}`,
-          )
-          .row(),
-      );
+      // Each row answers "which audience is this?" at a glance: the bound
+      // group's name (or "Anyone"), then the join count.
+      slice.forEach((l) => {
+        const joins = `${l.joinCount} ${l.joinCount === 1 ? 'join' : 'joins'}`;
+        const gone = l.active ? '' : ' · revoked';
+        kb.text(
+          `${l.active ? '🔗' : '🚫'} ${l.groupName ?? 'Anyone'} · ${joins}${gone}`,
+          `inv:view:${l.id}`,
+        ).row();
+      });
       this.navRow(kb, 'inv:list:', pg, pages);
       kb.text('➕ New link', 'inv:new').row();
       kb.text('🏠 Menu', 'menu:home');
@@ -516,12 +532,14 @@ export class AdminMenu {
       if (l.active) kb.text('🚫 Revoke', `inv:revoke:${id}`);
       kb.text('⬅️ Back', 'inv:list');
       const status = l.active ? '🟢 active' : '🔴 revoked';
-      const bound = l.groupId ? '\n<i>New joiners are auto-added to a group.</i>' : '';
+      const audience = l.groupName
+        ? `Joiners are added to <b>${esc(l.groupName)}</b>`
+        : 'Open to anyone (no group)';
       await this.render(
         ctx,
         this.flash(flash) +
           `<b>🔗 Invite link</b> (${status})\n` +
-          `Joins: ${l.joinCount}${bound}\n\n<code>${esc(l.url)}</code>`,
+          `${audience}\nJoins: ${l.joinCount}\n\n<code>${esc(l.url)}</code>`,
         kb,
         true,
       );
@@ -593,12 +611,15 @@ export class AdminMenu {
     }
     if (action === 'notif') {
       // Preview the picked template, then choose how to use it: send it verbatim,
-      // or take it as a base and write something on top for this send only.
+      // rewrite it (for this send only, or permanently), or write something on
+      // top for this send only.
       const n = await this.notifications.get(p.sourceId, arg);
       const kb = new InlineKeyboard()
         .text('➡️ Use as is', `bc:use:${n.id}`)
         .row()
-        .text('✏️ Add text on top', `bc:adjust:${n.id}`)
+        .text('✏️ Edit message', `bc:edit:${n.id}`)
+        .row()
+        .text('➕ Add text on top', `bc:adjust:${n.id}`)
         .row()
         .text('⬅️ Back', 'bc:start');
       await this.render(ctx, this.notifPreview(n), kb, true);
@@ -610,11 +631,19 @@ export class AdminMenu {
       return;
     }
     if (action === 'new') {
+      // Fresh free-form message (also the home-menu "Quick message" entry and
+      // /write) — reset any leftover selection so a stale target from an
+      // abandoned flow can't leak into this send.
+      session.broadcast = { groupIds: [], subscriberIds: [] };
       await this.enterConvo(ctx, 'composeBroadcastMsg');
       return;
     }
     if (action === 'adjust') {
       await this.enterConvo(ctx, 'adjustBroadcastMsg', arg);
+      return;
+    }
+    if (action === 'edit') {
+      await this.enterConvo(ctx, 'editBroadcastMsg', arg);
       return;
     }
     if (action === 'gtog') {
@@ -833,8 +862,7 @@ export class AdminMenu {
       const { slice, pg, pages } = this.paginate(all, parseInt(arg || '0', 10) || 0);
       const kb = new InlineKeyboard();
       slice.forEach((s) => {
-        const label = s.username ? `@${s.username}` : s.telegramUserId;
-        kb.text(`👤 ${label}`, `sub:view:${s.id}`).row();
+        kb.text(`👤 ${s.displayName}`, `sub:view:${s.id}`).row();
       });
       this.navRow(kb, 'sub:list:', pg, pages);
       kb.text('🏠 Menu', 'menu:home');
@@ -848,19 +876,27 @@ export class AdminMenu {
     if (action === 'view') {
       const s = (await this.subscribers.list(p.sourceId)).find((x) => x.id === arg);
       if (!s) return void (await this.sub(ctx, p, 'list', '', '⚠️ Subscriber not found'));
-      const label = s.username ? `@${s.username}` : s.telegramUserId;
       const kb = new InlineKeyboard()
         .text('📨 Send message', `sub:send:${s.id}`)
+        .row()
+        .text('✏️ Rename', `sub:ren:${s.id}`)
         .row()
         .text('➿ Move to group', `sub:move:${s.id}`)
         .row()
         .text('🚫 Unsubscribe', `sub:unsub:${s.id}`)
         .row()
         .text('⬅️ Back', 'sub:list');
+      // Identity facets under the display name — so the owner still knows who
+      // this is after renaming: Telegram name (when hidden by a custom name),
+      // @username, and the raw id.
+      const facts: string[] = [];
+      if (s.customName && s.name) facts.push(esc(s.name));
+      if (s.username) facts.push(`@${esc(s.username)}`);
+      facts.push(`<code>${s.telegramUserId}</code>`);
       await this.render(
         ctx,
         this.flash(flash) +
-          `<b>👤 ${esc(label)}</b>\n<code>${s.telegramUserId}</code>\n` +
+          `<b>👤 ${esc(s.displayName)}</b>\n${facts.join(' · ')}\n` +
           `Status: ${s.status} · joined ${this.formatWhen(s.joinedAt)} UTC`,
         kb,
         true,
@@ -868,26 +904,81 @@ export class AdminMenu {
       return;
     }
 
+    if (action === 'ren') {
+      await this.enterConvo(ctx, 'renameSubscriber', arg);
+      return;
+    }
+
     if (action === 'send') {
-      // Fresh single-recipient broadcast: pick which notification to send.
+      // Fresh single-recipient broadcast: pick a saved message or write one.
+      // The header names the recipient so the owner never loses track of who
+      // this message is for, even after a compose/edit detour.
       session.broadcast = { subscriberIds: [arg], groupIds: [] };
-      const items = await this.notifications.list(p.sourceId);
+      const [items, who] = await Promise.all([
+        this.notifications.list(p.sourceId),
+        this.subscribers
+          .list(p.sourceId)
+          .then((all) => all.find((x) => x.id === arg)),
+      ]);
       const kb = new InlineKeyboard();
       items.forEach((n) => kb.text(`📝 ${n.name}`, `sub:pick:${arg}:${n.id}`).row());
+      kb.text('✍️ Write a new message', `sub:new:${arg}`).row();
       kb.text('⬅️ Back', `sub:view:${arg}`);
+      const header = `<b>📨 Message to ${esc(who?.displayName ?? 'subscriber')}</b>`;
       await this.render(
         ctx,
         items.length
-          ? '<b>📨 Send message</b>\nPick a notification to send:'
-          : '<b>📨 Send message</b>\n\n📭 Create a notification first.',
+          ? `${header}\nPick a saved message, or write a new one:`
+          : `${header}\n\n📭 No saved messages yet — tap ✍️ to write one.`,
         kb,
         true,
       );
       return;
     }
 
+    if (action === 'new') {
+      // Custom message straight to this person, written on the fly. The compose
+      // tail sees the seeded target and offers "Review & send" (no group step).
+      session.broadcast = { groupIds: [], subscriberIds: [arg] };
+      await this.enterConvo(ctx, 'composeBroadcastMsg');
+      return;
+    }
+
     if (action === 'pick') {
-      // arg is "subscriberId:notificationId".
+      // arg is "subscriberId:notificationId". Preview + how-to-use choice —
+      // mirrors the broadcast composer, so a direct send can also rewrite or
+      // top up the selected message before it goes out.
+      const sep = arg.lastIndexOf(':');
+      const subId = arg.slice(0, sep);
+      const notifId = arg.slice(sep + 1);
+      session.broadcast = {
+        notificationId: notifId,
+        groupIds: [],
+        subscriberIds: [subId],
+      };
+      const [n, who] = await Promise.all([
+        this.notifications.get(p.sourceId, notifId),
+        this.subscribers
+          .list(p.sourceId)
+          .then((all) => all.find((x) => x.id === subId)),
+      ]);
+      const kb = new InlineKeyboard()
+        .text('➡️ Send as is', `sub:go:${arg}`)
+        .row()
+        .text('✏️ Edit message', `bc:edit:${notifId}`)
+        .row()
+        .text('➕ Add text on top', `bc:adjust:${notifId}`)
+        .row()
+        .text('⬅️ Back', `sub:send:${subId}`);
+      const to = who ? `\n\n<i>To: ${esc(who.displayName)}</i>` : '';
+      await this.render(ctx, this.notifPreview(n) + to, kb, true);
+      return;
+    }
+
+    if (action === 'go') {
+      // "Send as is" — the immediate path (placeholder prompts first if needed).
+      // arg is "subscriberId:notificationId"; re-seed the session so the button
+      // still works after a restart wiped the in-memory state.
       const sep = arg.lastIndexOf(':');
       const subId = arg.slice(0, sep);
       const notifId = arg.slice(sep + 1);
@@ -1005,10 +1096,9 @@ export class AdminMenu {
           `<b>📊 Poll results</b> · ${total} ${total === 1 ? 'vote' : 'votes'}\n\n` +
           (lines.join('\n') || 'No votes yet.');
       } else {
-        const lines = data.responses.map((r) => {
-          const who = r.username ? `@${r.username}` : `#${r.telegramUserId}`;
-          return `<b>${esc(who)}</b>: ${esc(r.text ?? '')}`;
-        });
+        const lines = data.responses.map(
+          (r) => `<b>${esc(r.displayName)}</b>: ${esc(r.text ?? '')}`,
+        );
         body =
           `<b>❓ Answers</b> · ${data.responses.length}\n\n` +
           (lines.join('\n\n') || 'No answers yet.');
@@ -1080,9 +1170,8 @@ export class AdminMenu {
     const { slice, pg, pages } = this.paginate(all, page);
     const kb = new InlineKeyboard();
     slice.forEach((s) => {
-      const label = s.username ? `@${s.username}` : s.telegramUserId;
       kb.text(
-        `${selected.has(s.id) ? '✅' : '⬜'} ${label}`,
+        `${selected.has(s.id) ? '✅' : '⬜'} ${s.displayName}`,
         `bc:stog:${s.id}:${pg}`,
       ).row();
     });
@@ -1102,10 +1191,19 @@ export class AdminMenu {
     const groupNames = (await this.groups.list(p.sourceId))
       .filter((g) => (b.groupIds ?? []).includes(g.id))
       .map((g) => g.name);
-    const peopleCount = b.subscriberIds?.length ?? 0;
+    // Name the direct recipients (first few) — "to: Оля" beats "to: 1 person".
+    const subs = b.subscriberIds?.length
+      ? await this.subscribers.list(p.sourceId)
+      : [];
+    const personNames = (b.subscriberIds ?? [])
+      .map((id) => subs.find((s) => s.id === id)?.displayName)
+      .filter((x): x is string => !!x);
+    const shown = personNames.slice(0, 3);
+    const more = personNames.length - shown.length;
     const parts = [
       ...groupNames,
-      ...(peopleCount ? [`${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}`] : []),
+      ...shown,
+      ...(more > 0 ? [`+${more} more`] : []),
     ];
     const kb = new InlineKeyboard()
       .text('✅ Send now', 'bc:send')
@@ -1122,6 +1220,11 @@ export class AdminMenu {
   private async doSend(ctx: Context, p: AuthPrincipal): Promise<void> {
     const session = getSession(ctx.from!.id);
     const b = session.broadcast!;
+    const direct = await this.directLabel(
+      p.sourceId,
+      b.groupIds ?? [],
+      b.subscriberIds ?? [],
+    );
     const view = await this.broadcasts.create(
       p.sourceId,
       {
@@ -1136,7 +1239,25 @@ export class AdminMenu {
     );
     clearSession(ctx.from!.id);
     const kb = new InlineKeyboard().text('🏠 Menu', 'menu:home');
-    await this.render(ctx, this.sentSummary(view.totalCount, (b.groupIds ?? []).length), kb, true);
+    await this.render(
+      ctx,
+      this.sentSummary(view.totalCount, (b.groupIds ?? []).length, direct),
+      kb,
+      true,
+    );
+  }
+
+  /** For a single-person direct send, that person's display name (else null). */
+  private async directLabel(
+    sourceId: string,
+    groupIds: string[],
+    subscriberIds: string[],
+  ): Promise<string | null> {
+    if (groupIds.length || subscriberIds.length !== 1) return null;
+    const s = (await this.subscribers.list(sourceId)).find(
+      (x) => x.id === subscriberIds[0],
+    );
+    return s?.displayName ?? null;
   }
 
   // ── Free-text fallback ──────────────────────────────────────────────────────
@@ -1194,6 +1315,8 @@ export class AdminMenu {
     bot.use(createConversation(this.bcFillConvo as never, 'bcFill') as never);
     bot.use(createConversation(this.composeBroadcastMsgConvo as never, 'composeBroadcastMsg') as never);
     bot.use(createConversation(this.adjustBroadcastMsgConvo as never, 'adjustBroadcastMsg') as never);
+    bot.use(createConversation(this.editBroadcastMsgConvo as never, 'editBroadcastMsg') as never);
+    bot.use(createConversation(this.renameSubscriberConvo as never, 'renameSubscriber') as never);
     bot.use(createConversation(this.scheduleBroadcastConvo as never, 'scheduleBroadcast') as never);
     bot.use(createConversation(this.pollSetupConvo as never, 'pollSetup') as never);
     bot.use(createConversation(this.answerQuestionConvo as never, 'answerQuestion') as never);
@@ -1409,6 +1532,9 @@ export class AdminMenu {
       (JSON.parse(interactionJson) as
         | { type: 'poll' | 'question'; options: string[] }
         | null) ?? undefined;
+    const direct = await conversation.external(() =>
+      this.directLabel(sourceId, groupIds, subscriberIds),
+    );
     try {
       const view = await conversation.external(() =>
         this.broadcasts.create(
@@ -1424,7 +1550,7 @@ export class AdminMenu {
           `telegram:${ctx.from?.id}`,
         ),
       );
-      await ctx.reply(this.sentSummary(view.totalCount, groupIds.length), {
+      await ctx.reply(this.sentSummary(view.totalCount, groupIds.length, direct), {
         parse_mode: 'HTML',
         reply_markup: this.homeKeyboard(),
       });
@@ -1520,8 +1646,7 @@ export class AdminMenu {
 
   /**
    * Shared tail for the compose/adjust flows: ask one-time vs saved, create the
-   * (possibly ephemeral) notification, stash it on the session, then hand off to
-   * the recipient picker via a button — so nav stays edit-in-place from there.
+   * (possibly ephemeral) notification, then hand off via {@link handoffComposed}.
    */
   private finishComposed = async (
     conversation: Conv,
@@ -1571,25 +1696,202 @@ export class AdminMenu {
       }));
     }
 
-    await conversation.external(() => {
-      const s = getSession(ctx.from!.id);
-      s.broadcast = { notificationId: created.id, groupIds: [], subscriberIds: [] };
-    });
-
     const note = ephemeral
       ? '<i>One-time message — not saved to your gallery.</i>'
       : `<i>Saved as “${esc(created.name)}”.</i>`;
-    const ph = created.placeholders.length
-      ? `\n<i>You'll fill ${esc(created.placeholders.map((x) => `{${x}}`).join(', '))} before it sends.</i>`
-      : '';
-    const kb = new InlineKeyboard()
-      .text('▶️ Choose recipients', 'bc:groups')
-      .row()
-      .text('✖ Cancel', 'menu:home');
-    await ctx.reply(`✅ Ready. ${note}${ph}\n\nNow pick who gets it.`, {
-      parse_mode: 'HTML',
-      reply_markup: kb,
+    await this.handoffComposed(conversation, ctx, created, note);
+  };
+
+  /**
+   * Shared handoff after a message is composed/edited: stash it on the session
+   * — PRESERVING any target the entry point seeded (the direct-to-subscriber
+   * flow pre-picks the recipient) — then hand off via a button so nav stays
+   * edit-in-place: straight to review when a target is set, else the picker.
+   */
+  private handoffComposed = async (
+    conversation: Conv,
+    ctx: Context,
+    n: NotificationView,
+    note: string,
+  ): Promise<void> => {
+    const hasTargets = await conversation.external(() => {
+      const s = getSession(ctx.from!.id);
+      s.broadcast = {
+        ...s.broadcast,
+        notificationId: n.id,
+        groupIds: s.broadcast?.groupIds ?? [],
+        subscriberIds: s.broadcast?.subscriberIds ?? [],
+      };
+      return this.hasTargets(s.broadcast);
     });
+    const ph = n.placeholders.length
+      ? `\n<i>You'll fill ${esc(n.placeholders.map((x) => `{${x}}`).join(', '))} before it sends.</i>`
+      : '';
+    const kb = new InlineKeyboard();
+    if (hasTargets) kb.text('▶️ Review & send', 'bc:now');
+    else kb.text('▶️ Choose recipients', 'bc:groups');
+    kb.row().text('✖ Cancel', 'menu:home');
+    await ctx.reply(
+      `✅ Ready. ${note}${ph}\n\n` +
+        (hasTargets ? 'Review the send to finish.' : 'Now pick who gets it.'),
+      { parse_mode: 'HTML', reply_markup: kb },
+    );
+  };
+
+  /**
+   * Rewrite the selected message before sending. The owner sends replacement
+   * text, then picks the blast radius: use it for this send only (the saved
+   * template stays untouched) or update the template in place (permanent).
+   */
+  private editBroadcastMsgConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    baseId: string,
+  ): Promise<void> => {
+    const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    let base: NotificationView;
+    try {
+      base = await conversation.external(() => this.notifications.get(sourceId, baseId));
+    } catch {
+      return void (await ctx.reply('That message no longer exists.', {
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
+    const preview = base.body.length > 500 ? `${base.body.slice(0, 500)}…` : base.body;
+    await ctx.reply(
+      `✏️ <b>Edit</b> “${esc(base.name)}”.\n\n<i>Current message:</i>\n${esc(preview)}\n\n` +
+        'Send the new text — it <b>replaces</b> the message above.',
+      { parse_mode: 'HTML', reply_markup: cancel },
+    );
+    let body = '';
+    for (;;) {
+      const u = await conversation.wait();
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      const t = u.message?.text;
+      if (!t || !t.trim()) {
+        await ctx.reply('Please send the new text, or ✖ Cancel.', { reply_markup: cancel });
+        continue;
+      }
+      body = t;
+      break;
+    }
+
+    const modeKb = new InlineKeyboard()
+      .text('1️⃣ Just this send', 'convo:save:once')
+      .text('💾 Update template', 'convo:save:keep')
+      .row()
+      .text('✖ Cancel', 'convo:cancel');
+    const finalPreview = body.length > 600 ? `${body.slice(0, 600)}…` : body;
+    await ctx.reply(
+      `📄 <b>Your message</b>\n\n${esc(finalPreview)}\n\n` +
+        '💾 <b>Apply how?</b>\n<i>“Just this send” leaves the saved template ' +
+        'unchanged; “Update template” saves this text permanently.</i>',
+      { parse_mode: 'HTML', reply_markup: modeKb },
+    );
+    let permanent = false;
+    for (;;) {
+      const u = await conversation.wait();
+      const d = u.callbackQuery?.data;
+      if (d === 'convo:save:once' || d === 'convo:save:keep') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        permanent = d === 'convo:save:keep';
+        break;
+      }
+      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      await ctx.reply('Tap “Just this send” or “Update template”.', { reply_markup: modeKb });
+    }
+
+    let n: NotificationView;
+    try {
+      n = await conversation.external(() =>
+        permanent
+          ? this.notifications.update(sourceId, baseId, { body })
+          : this.notifications.createInline(sourceId, {
+              body,
+              name: `${base.name} (edited)`,
+              ephemeral: true,
+            }),
+      );
+    } catch (err) {
+      return void (await ctx.reply(`⚠️ ${esc(humanError(err))}`, {
+        parse_mode: 'HTML',
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
+    const note = permanent
+      ? `<i>Template “${esc(n.name)}” updated for future sends too.</i>`
+      : '<i>One-time version — the saved template is unchanged.</i>';
+    await this.handoffComposed(conversation, ctx, n, note);
+  };
+
+  /**
+   * Give a subscriber a friendly display name (visible to the owner only).
+   * Reset clears the override, falling back to their Telegram profile name.
+   */
+  private renameSubscriberConvo = async (
+    conversation: Conv,
+    ctx: Context,
+    subId: string,
+  ): Promise<void> => {
+    const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
+    if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
+    const s = await conversation.external(async () =>
+      (await this.subscribers.list(sourceId)).find((x) => x.id === subId),
+    );
+    if (!s) {
+      return void (await ctx.reply('That subscriber no longer exists.', {
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
+    const kb = new InlineKeyboard();
+    if (s.customName) kb.text('↩️ Reset to Telegram name', 'convo:reset');
+    kb.text('✖ Cancel', 'convo:cancel');
+    await ctx.reply(
+      `✏️ <b>Rename</b> “${esc(s.displayName)}”\nSend the new name — only you will see it:`,
+      { parse_mode: 'HTML', reply_markup: kb },
+    );
+    for (;;) {
+      const u = await conversation.wait();
+      let newName: string | null;
+      if (u.callbackQuery?.data === 'convo:reset') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        newName = null;
+      } else {
+        if (this.isCancel(u)) return this.cancelled(ctx, u);
+        const t = (u.message?.text ?? '').trim();
+        if (!t) {
+          await ctx.reply('Please send a name as text, or ✖ Cancel.', { reply_markup: kb });
+          continue;
+        }
+        if (t.length > 120) {
+          await ctx.reply('That name is too long (max 120). Try a shorter one.', {
+            reply_markup: kb,
+          });
+          continue;
+        }
+        newName = t;
+      }
+      try {
+        const v = await conversation.external(() =>
+          this.subscribers.rename(sourceId, subId, newName),
+        );
+        await ctx.reply(`✅ Now shown as <b>${esc(v.displayName)}</b>.`, {
+          parse_mode: 'HTML',
+          reply_markup: new InlineKeyboard()
+            .text('👤 Back to subscriber', `sub:view:${subId}`)
+            .row()
+            .text('🏠 Menu', 'menu:home'),
+        });
+      } catch (err) {
+        await ctx.reply(`⚠️ ${esc(humanError(err))}`, {
+          parse_mode: 'HTML',
+          reply_markup: this.homeKeyboard(),
+        });
+      }
+      return;
+    }
   };
 
   /** Owner sets up a poll: collect 2–4 options, stash on the session, then send. */
@@ -1798,6 +2100,8 @@ export class AdminMenu {
 
   private homeKeyboard(): InlineKeyboard {
     return new InlineKeyboard()
+      .text('✍️ Quick message', 'bc:new')
+      .row()
       .text('📝 Notifications', 'notif:list')
       .text('👥 Groups', 'grp:list')
       .row()
@@ -1810,14 +2114,21 @@ export class AdminMenu {
       .text('📥 Responses', 'res:list');
   }
 
-  private sentSummary(recipients: number, groupCount: number): string {
+  private sentSummary(
+    recipients: number,
+    groupCount: number,
+    direct?: string | null,
+  ): string {
     if (recipients === 0) {
       return '📭 No active recipients — nothing was sent.';
     }
+    // Set the expectation for the 📬 delivery report that follows.
+    const confirm = "\n<i>I'll confirm once delivered.</i>";
+    if (direct) return `✅ <b>On its way</b> to ${esc(direct)}.${confirm}`;
     const people = recipients === 1 ? '1 person' : `${recipients} people`;
-    if (groupCount === 0) return `✅ <b>On its way</b> to ${people}.`;
+    if (groupCount === 0) return `✅ <b>On its way</b> to ${people}.${confirm}`;
     const groups = groupCount === 1 ? '1 group' : `${groupCount} groups`;
-    return `✅ <b>On its way</b> to ${people} (${groups}).`;
+    return `✅ <b>On its way</b> to ${people} (${groups}).${confirm}`;
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────

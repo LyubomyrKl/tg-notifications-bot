@@ -120,10 +120,22 @@ export const SubscriberView = z.object({
   id: z.string(),
   telegramUserId: z.string(),
   username: z.string().nullable(),
+  /** Telegram profile name captured at join / refreshed on interactions. */
+  name: z.string().nullable(),
+  /** Admin-set override; wins over `name` and `username`. */
+  customName: z.string().nullable(),
+  /** Ready-to-render label: customName → name → @username → telegram id. */
+  displayName: z.string(),
   status: z.enum(['active', 'unsubscribed']),
   joinedAt: z.string(),
 });
 export type SubscriberView = z.infer<typeof SubscriberView>;
+
+/** Admin rename; `customName: null` clears the override (back to Telegram name). */
+export const RenameSubscriberInput = z.object({
+  customName: z.string().trim().min(1).max(120).nullable(),
+});
+export type RenameSubscriberInput = z.infer<typeof RenameSubscriberInput>;
 
 // ── Invite links ────────────────────────────────────────────────────────────
 export const CreateInviteLinkInput = z.object({
@@ -140,6 +152,8 @@ export const InviteLinkView = z.object({
   url: z.string(),
   token: z.string(),
   groupId: z.string().nullable(),
+  /** Name of the bound group (joiners auto-added), or null = open to anyone. */
+  groupName: z.string().nullable(),
   notificationId: z.string().nullable(),
   expiresAt: z.string().nullable(),
   revokedAt: z.string().nullable(),
@@ -241,6 +255,8 @@ export const BroadcastResponseView = z.object({
   subscriberId: z.string(),
   telegramUserId: z.string(),
   username: z.string().nullable(),
+  /** Ready-to-render label (same precedence as SubscriberView.displayName). */
+  displayName: z.string(),
   optionIndex: z.number().int().nullable(),
   text: z.string().nullable(),
   createdAt: z.string(),

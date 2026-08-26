@@ -123,7 +123,7 @@ describe('InviteService.open', () => {
       new SubscriberService(fake, { record: async () => {} } as any),
     );
 
-    const r1 = await svc.open('inv_abc', 777n, 'neo');
+    const r1 = await svc.open('inv_abc', 777n, { username: 'neo', name: 'Neo A' });
     expect(r1.alreadyJoined).toBe(false);
     expect(r1.sourceName).toBe('Acme');
     expect(r1.groupName).toBe('VIP');
@@ -132,7 +132,7 @@ describe('InviteService.open', () => {
     expect(fake.members).toHaveLength(1);
 
     // Reopen — idempotent: no double count, no duplicate join/membership.
-    const r2 = await svc.open('inv_abc', 777n, 'neo');
+    const r2 = await svc.open('inv_abc', 777n, { username: 'neo', name: 'Neo A' });
     expect(r2.alreadyJoined).toBe(true);
     expect(fake.links[0].joinCount).toBe(1);
     expect(fake.joins).toHaveLength(1);
@@ -143,7 +143,7 @@ describe('InviteService.open', () => {
     const fake = makeFakePrisma();
     seedLink(fake, { revokedAt: new Date('2020-01-01') });
     const svc = new InviteService(fake, telegram as any, new SubscriberService(fake, { record: async () => {} } as any));
-    await expect(svc.open('inv_abc', 1n, undefined)).rejects.toBeInstanceOf(
+    await expect(svc.open('inv_abc', 1n, {})).rejects.toBeInstanceOf(
       BadRequestException,
     );
   });
@@ -153,7 +153,7 @@ describe('InviteService.open', () => {
     seedLink(fake, { expiresAt: new Date('2020-01-01') });
     const svc = new InviteService(fake, telegram as any, new SubscriberService(fake, { record: async () => {} } as any));
     await expect(
-      svc.open('inv_abc', 1n, undefined, new Date('2026-01-01')),
+      svc.open('inv_abc', 1n, {}, new Date('2026-01-01')),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -168,7 +168,7 @@ describe('InviteService.open', () => {
     });
     const svc = new InviteService(fake, telegram as any, new SubscriberService(fake, { record: async () => {} } as any));
 
-    await svc.open('inv_abc', 5n, undefined);
+    await svc.open('inv_abc', 5n, {});
     expect(fake.subscribers[0].status).toBe('active');
   });
 

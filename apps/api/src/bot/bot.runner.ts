@@ -13,7 +13,7 @@ import {
   SourceService,
   SubscriberService,
 } from '@paedavic/core';
-import { type Context, TelegramService } from '@paedavic/telegram';
+import { type Context, profileName, TelegramService } from '@paedavic/telegram';
 import { AdminMenu } from './admin-menu';
 
 /**
@@ -95,6 +95,11 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       return;
     }
     const tgId = BigInt(ctx.from.id);
+    // Opportunistic identity backfill: /start gives us fresh profile data for
+    // subscribers who joined before names were captured. Fire-and-forget.
+    void this.subscribers
+      .refreshIdentity(tgId, ctx.from.username, profileName(ctx.from))
+      .catch(() => undefined);
     if (await this.sources.resolveByTelegramId(tgId)) {
       await this.adminMenu.openHome(ctx, false);
       return;
@@ -159,11 +164,10 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     telegramUserId: bigint,
   ): Promise<void> {
     try {
-      const result = await this.invites.open(
-        token,
-        telegramUserId,
-        ctx.from?.username,
-      );
+      const result = await this.invites.open(token, telegramUserId, {
+        username: ctx.from?.username,
+        name: profileName(ctx.from),
+      });
       const group = result.groupName ? ` and added to "${result.groupName}"` : '';
       const headline = result.alreadyJoined
         ? `👋 You're already subscribed to "${result.sourceName}".`
