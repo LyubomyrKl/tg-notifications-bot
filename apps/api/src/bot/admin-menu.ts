@@ -1176,6 +1176,9 @@ export class AdminMenu {
       ).row();
     });
     this.navRow(kb, 'bc:people:', pg, pages);
+    // Same forward affordance as the groups screen — nobody should have to go
+    // "back" to move forward.
+    if (this.hasTargets(session.broadcast ?? {})) kb.text('▶️ Continue', 'bc:go').row();
     kb.text('⬅️ Back to groups', 'bc:groups').row();
     kb.text('✖ Cancel', 'menu:home');
     const body = all.length
