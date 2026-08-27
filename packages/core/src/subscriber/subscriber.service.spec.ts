@@ -115,6 +115,61 @@ describe('SubscriberService names', () => {
     expect(cleared.displayName).toBe('Neo Anderson'); // back to Telegram name
   });
 
+  it('history maps per-person delivery records, tenant-scoped', async () => {
+    const fake: any = makeFakePrisma(seed());
+    fake.broadcastRecipient = {
+      findMany: async ({ where }: any) =>
+        where.subscriberId === 's1'
+          ? [
+              {
+                broadcastId: 'b2',
+                status: 'sent',
+                sentAt: new Date('2026-08-26T10:00:00Z'),
+                error: null,
+                broadcast: {
+                  createdAt: new Date('2026-08-26T09:59:00Z'),
+                  notification: { name: 'Промо' },
+                },
+              },
+              {
+                broadcastId: 'b1',
+                status: 'blocked',
+                sentAt: null,
+                error: 'bot was blocked by the user',
+                broadcast: {
+                  createdAt: new Date('2026-08-20T08:00:00Z'),
+                  notification: { name: 'Нагадування' },
+                },
+              },
+            ]
+          : [],
+    };
+    const svc = new SubscriberService(fake as any, audit as any);
+
+    // Another tenant can't read this subscriber's history.
+    await expect(svc.history('src_B', 's1')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    const entries = await svc.history('src_A', 's1');
+    expect(entries).toEqual([
+      {
+        broadcastId: 'b2',
+        notificationName: 'Промо',
+        status: 'sent',
+        when: '2026-08-26T10:00:00.000Z',
+        error: null,
+      },
+      {
+        broadcastId: 'b1',
+        notificationName: 'Нагадування',
+        status: 'blocked',
+        when: '2026-08-20T08:00:00.000Z', // falls back to the broadcast time
+        error: 'bot was blocked by the user',
+      },
+    ]);
+  });
+
   it('refreshIdentity backfills every workspace row for that Telegram user', async () => {
     const fake = makeFakePrisma(seed());
     const svc = new SubscriberService(fake as any, audit as any);

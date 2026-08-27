@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   RenameSubscriberInput,
+  type SubscriberHistoryEntry,
   type SubscriberView,
 } from '@paedavic/contracts';
 import { type AuthPrincipal, SubscriberService } from '@paedavic/core';
@@ -30,6 +31,15 @@ export class SubscriberController {
     return this.subscribers.list(p.sourceId, {
       includeUnsubscribed: includeUnsubscribed === 'true',
     });
+  }
+
+  /** Per-person delivery log, newest first (group sends included). */
+  @Get(':id/history')
+  history(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('id') id: string,
+  ): Promise<SubscriberHistoryEntry[]> {
+    return this.subscribers.history(p.sourceId, id);
   }
 
   /** Set or clear (`customName: null`) the admin-facing display name. */

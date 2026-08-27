@@ -137,6 +137,17 @@ export const RenameSubscriberInput = z.object({
 });
 export type RenameSubscriberInput = z.infer<typeof RenameSubscriberInput>;
 
+/** One entry of a subscriber's delivery history (per-person, incl. group sends). */
+export const SubscriberHistoryEntry = z.object({
+  broadcastId: z.string(),
+  notificationName: z.string(),
+  status: z.enum(['queued', 'sent', 'failed', 'blocked']),
+  /** Delivery time when sent; the broadcast's creation time otherwise. */
+  when: z.string(),
+  error: z.string().nullable(),
+});
+export type SubscriberHistoryEntry = z.infer<typeof SubscriberHistoryEntry>;
+
 // ── Invite links ────────────────────────────────────────────────────────────
 export const CreateInviteLinkInput = z.object({
   // Optional bindings; both validated to belong to the caller's Source.

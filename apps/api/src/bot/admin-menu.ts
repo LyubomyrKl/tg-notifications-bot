@@ -879,6 +879,7 @@ export class AdminMenu {
       const kb = new InlineKeyboard()
         .text('📨 Send message', `sub:send:${s.id}`)
         .row()
+        .text('📜 History', `sub:hist:${s.id}`)
         .text('✏️ Rename', `sub:ren:${s.id}`)
         .row()
         .text('➿ Move to group', `sub:move:${s.id}`)
@@ -906,6 +907,46 @@ export class AdminMenu {
 
     if (action === 'ren') {
       await this.enterConvo(ctx, 'renameSubscriber', arg);
+      return;
+    }
+
+    if (action === 'hist') {
+      // arg is "subscriberId" or "subscriberId:page". Per-person delivery log —
+      // every message they got (or missed), group sends included.
+      const [subId, pageStr] = arg.split(':');
+      const page = parseInt(pageStr || '0', 10) || 0;
+      const [s, entries] = await Promise.all([
+        this.subscribers
+          .list(p.sourceId)
+          .then((all) => all.find((x) => x.id === subId)),
+        this.subscribers.history(p.sourceId, subId),
+      ]);
+      const { slice, pg, pages } = this.paginate(entries, page);
+      const icons = { sent: '✅', blocked: '🚫', failed: '⚠️', queued: '⏳' } as const;
+      const lines = slice.map((e) => {
+        const note =
+          e.status === 'sent'
+            ? ''
+            : e.status === 'blocked'
+              ? ' (blocked the bot)'
+              : e.status === 'queued'
+                ? ' (sending…)'
+                : e.error?.includes('unsubscribed')
+                  ? ' (unsubscribed)'
+                  : ' (failed)';
+        return `${icons[e.status]} ${this.formatWhen(e.when)} · ${esc(e.notificationName)}${note}`;
+      });
+      const kb = new InlineKeyboard();
+      this.navRow(kb, `sub:hist:${subId}:`, pg, pages);
+      kb.text('⬅️ Back', `sub:view:${subId}`);
+      const who = s ? esc(s.displayName) : 'subscriber';
+      await this.render(
+        ctx,
+        `<b>📜 History — ${who}</b> · ${entries.length}\n\n` +
+          (lines.join('\n') || '📭 Nothing has been sent to them yet.'),
+        kb,
+        true,
+      );
       return;
     }
 

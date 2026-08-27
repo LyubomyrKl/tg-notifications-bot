@@ -1,5 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { SubscriberView } from '@paedavic/contracts';
+import type {
+  SubscriberHistoryEntry,
+  SubscriberView,
+} from '@paedavic/contracts';
 import {
   PrismaService,
   type Subscriber,
@@ -65,6 +68,35 @@ export class SubscriberService {
         ...(name !== undefined && { name }),
       },
     });
+  }
+
+  /**
+   * Everything ever sent (or attempted) to one subscriber, newest first —
+   * including broadcasts they received as a group member. Reads the
+   * per-recipient delivery records, so status is per-person, not per-broadcast.
+   */
+  async history(
+    sourceId: string,
+    subscriberId: string,
+  ): Promise<SubscriberHistoryEntry[]> {
+    const subscriber = await this.prisma.subscriber.findFirst({
+      where: { id: subscriberId, sourceId },
+    });
+    if (!subscriber) throw new NotFoundException('Subscriber not found');
+    const rows = await this.prisma.broadcastRecipient.findMany({
+      where: { subscriberId },
+      include: {
+        broadcast: { include: { notification: { select: { name: true } } } },
+      },
+      orderBy: { broadcast: { createdAt: 'desc' } },
+    });
+    return rows.map((r) => ({
+      broadcastId: r.broadcastId,
+      notificationName: r.broadcast.notification?.name ?? 'message',
+      status: r.status,
+      when: (r.sentAt ?? r.broadcast.createdAt).toISOString(),
+      error: r.error,
+    }));
   }
 
   /** Admin display override; `customName: null` reverts to the Telegram name. */
