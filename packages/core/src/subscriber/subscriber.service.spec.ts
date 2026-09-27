@@ -16,9 +16,33 @@ function makeFakePrisma(seed: any[]) {
           )
           .map((s) => ({ id: s.id, sourceId: s.sourceId })),
       findFirst: async ({ where }: any) =>
-        subscribers.find(
-          (s) => s.id === where.id && s.sourceId === where.sourceId,
+        subscribers.find((s) =>
+          Object.entries(where).every(([k, v]: [string, any]) =>
+            v && typeof v === 'object' && 'not' in v
+              ? (s as any)[k] !== v.not
+              : (s as any)[k] === v,
+          ),
         ) ?? null,
+      upsert: async ({ where, create, update }: any) => {
+        const key = where.sourceId_telegramUserId;
+        const existing = subscribers.find(
+          (s) =>
+            s.sourceId === key.sourceId &&
+            s.telegramUserId === key.telegramUserId,
+        );
+        if (existing) {
+          Object.assign(existing, update);
+          return existing;
+        }
+        const created = {
+          id: `s${subscribers.length + 1}`,
+          status: 'active',
+          joinedAt: new Date(),
+          ...create,
+        };
+        subscribers.push(created);
+        return created;
+      },
       update: async ({ where, data }: any) => {
         const s = subscribers.find((x) => x.id === where.id)!;
         Object.assign(s, data);
@@ -87,13 +111,16 @@ describe('SubscriberService names', () => {
   ];
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
 
-  it('subscriberDisplayName: customName → name → @username → id', () => {
-    const base = { customName: null, name: null, username: null, telegramUserId: 42n };
+  it('subscriberDisplayName: customName → selfName → name → @username → id', () => {
+    const base = { customName: null, selfName: null, name: null, username: null, telegramUserId: 42n };
     expect(subscriberDisplayName(base)).toBe('42');
     expect(subscriberDisplayName({ ...base, username: 'neo' })).toBe('@neo');
     expect(subscriberDisplayName({ ...base, username: 'neo', name: 'Neo Anderson' })).toBe('Neo Anderson');
     expect(
-      subscriberDisplayName({ ...base, username: 'neo', name: 'Neo Anderson', customName: 'Оля з салону' }),
+      subscriberDisplayName({ ...base, username: 'neo', name: 'Neo Anderson', selfName: 'Нео' }),
+    ).toBe('Нео');
+    expect(
+      subscriberDisplayName({ ...base, username: 'neo', name: 'Neo Anderson', selfName: 'Нео', customName: 'Оля з салону' }),
     ).toBe('Оля з салону');
   });
 
@@ -113,6 +140,44 @@ describe('SubscriberService names', () => {
     const cleared = await svc.rename('src_A', 's1', null);
     expect(cleared.customName).toBeNull();
     expect(cleared.displayName).toBe('Neo Anderson'); // back to Telegram name
+  });
+
+  it('renameSelf applies to every workspace row; admin override still wins', async () => {
+    const fake = makeFakePrisma(seed());
+    const svc = new SubscriberService(fake as any, audit as any);
+
+    const count = await svc.renameSelf(9n, '  Нео  ');
+    expect(count).toBe(2); // both workspaces, trimmed
+    expect(fake.subscribers.every((s) => s.selfName === 'Нео')).toBe(true);
+    expect(await svc.selfNameByTelegramId(9n)).toBe('Нео');
+
+    // Shown wherever the admin has no label of their own…
+    const v = await svc.rename('src_A', 's1', null);
+    expect(v.displayName).toBe('Нео');
+    // …but the admin's per-workspace label wins where set.
+    const labeled = await svc.rename('src_A', 's1', 'Оля');
+    expect(labeled.displayName).toBe('Оля');
+    expect(labeled.selfName).toBe('Нео');
+
+    // Clearing the self name reverts to the Telegram profile name.
+    await svc.renameSelf(9n, null);
+    expect(await svc.selfNameByTelegramId(9n)).toBeNull();
+    expect((await svc.rename('src_A', 's1', null)).displayName).toBe('Neo Anderson');
+  });
+
+  it('a later join inherits the self-chosen name; a re-join never clobbers it', async () => {
+    const fake = makeFakePrisma(seed());
+    const svc = new SubscriberService(fake as any, audit as any);
+    await svc.renameSelf(9n, 'Нео');
+
+    // Joining a THIRD workspace: the fresh row starts with the chosen name.
+    const joined = await svc.upsert('src_C', 9n, 'neo', 'Neo Anderson');
+    expect(joined.selfName).toBe('Нео');
+
+    // Re-joining an existing workspace refreshes Telegram identity only.
+    const rejoined = await svc.upsert('src_A', 9n, 'neo2', 'Neo A.');
+    expect(rejoined.selfName).toBe('Нео');
+    expect(rejoined.username).toBe('neo2');
   });
 
   it('history maps per-person delivery records, tenant-scoped', async () => {

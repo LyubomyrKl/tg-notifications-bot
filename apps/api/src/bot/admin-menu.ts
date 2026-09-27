@@ -199,6 +199,13 @@ export class AdminMenu {
       return void (await this.onResponseCallback(ctx, ns, action, arg));
     }
 
+    // "Change my name" on the reader card / join message — subscriber
+    // self-service, so it must also run before the owner gate.
+    if (ns === 'self' && action === 'ren') {
+      await ctx.answerCallbackQuery().catch(() => undefined);
+      return void (await this.enterConvo(ctx, 'renameSelf'));
+    }
+
     await ctx.answerCallbackQuery().catch(() => undefined); // ack the spinner
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
@@ -888,10 +895,11 @@ export class AdminMenu {
         .row()
         .text('⬅️ Back', 'sub:list');
       // Identity facets under the display name — so the owner still knows who
-      // this is after renaming: Telegram name (when hidden by a custom name),
-      // @username, and the raw id.
+      // this is after any rename: the name they chose for themselves and their
+      // Telegram name (when hidden by an override), @username, and the raw id.
       const facts: string[] = [];
-      if (s.customName && s.name) facts.push(esc(s.name));
+      if (s.selfName && s.selfName !== s.displayName) facts.push(esc(s.selfName));
+      if (s.name && s.name !== s.displayName) facts.push(esc(s.name));
       if (s.username) facts.push(`@${esc(s.username)}`);
       facts.push(`<code>${s.telegramUserId}</code>`);
       await this.render(
@@ -1327,10 +1335,16 @@ export class AdminMenu {
       : '';
     return (
       `📬 <b>You're subscribed${where}.</b>\n\n` +
-      `Updates arrive right here — there's nothing to manage and no commands to run. ` +
+      `Updates arrive right here — no commands to run. ` +
       `When a message asks for a response, just tap its buttons.\n\n` +
       `Send /stop anytime to unsubscribe.`
     );
+  }
+
+  /** Buttons under the reader card / join message: subscriber self-service.
+   *  Public so {@link BotRunner} attaches the same actions on its replies. */
+  consumerKeyboard(): InlineKeyboard {
+    return new InlineKeyboard().text('✏️ Change my name', 'self:ren');
   }
 
   /** Reply to a non-owner: reader card if subscribed, else a connect prompt. */
@@ -1339,6 +1353,7 @@ export class AdminMenu {
     if (subs.length) {
       await ctx.reply(this.consumerMessage(subs.map((s) => s.sourceName)), {
         parse_mode: 'HTML',
+        reply_markup: this.consumerKeyboard(),
       });
       return;
     }
@@ -1361,6 +1376,7 @@ export class AdminMenu {
     bot.use(createConversation(this.adjustBroadcastMsgConvo as never, 'adjustBroadcastMsg') as never);
     bot.use(createConversation(this.editBroadcastMsgConvo as never, 'editBroadcastMsg') as never);
     bot.use(createConversation(this.renameSubscriberConvo as never, 'renameSubscriber') as never);
+    bot.use(createConversation(this.renameSelfConvo as never, 'renameSelf') as never);
     bot.use(createConversation(this.scheduleBroadcastConvo as never, 'scheduleBroadcast') as never);
     bot.use(createConversation(this.pollSetupConvo as never, 'pollSetup') as never);
     bot.use(createConversation(this.answerQuestionConvo as never, 'answerQuestion') as never);
@@ -1872,7 +1888,8 @@ export class AdminMenu {
 
   /**
    * Give a subscriber a friendly display name (visible to the owner only).
-   * Reset clears the override, falling back to their Telegram profile name.
+   * Reset clears the override, falling back to the name the subscriber chose
+   * for themselves (if any), else their Telegram profile name.
    */
   private renameSubscriberConvo = async (
     conversation: Conv,
@@ -1890,7 +1907,7 @@ export class AdminMenu {
       }));
     }
     const kb = new InlineKeyboard();
-    if (s.customName) kb.text('↩️ Reset to Telegram name', 'convo:reset');
+    if (s.customName) kb.text('↩️ Reset to their own name', 'convo:reset');
     kb.text('✖ Cancel', 'convo:cancel');
     await ctx.reply(
       `✏️ <b>Rename</b> “${esc(s.displayName)}”\nSend the new name — only you will see it:`,
@@ -1978,6 +1995,79 @@ export class AdminMenu {
       `📊 Poll ready: <i>${options.map(esc).join(' · ')}</i>\nSend now?`,
       { parse_mode: 'HTML', reply_markup: kb },
     );
+  };
+
+  /**
+   * A subscriber picks the name workspaces see for them (“Change my name” on
+   * the reader card / join message). One name per person — it applies to every
+   * workspace they follow. An owner's per-workspace rename still wins where
+   * set. Subscriber-facing: cancels are quiet, no admin menu anywhere.
+   */
+  private renameSelfConvo = async (conversation: Conv, ctx: Context): Promise<void> => {
+    const tgId = ctx.from?.id;
+    if (!tgId) return;
+    const current = await conversation.external(() =>
+      this.subscribers.selfNameByTelegramId(BigInt(tgId)),
+    );
+    const kb = new InlineKeyboard();
+    if (current) kb.text('↩️ Use my Telegram name', 'convo:reset');
+    kb.text('✖ Cancel', 'convo:cancel');
+    await ctx.reply(
+      current
+        ? `✏️ You appear as <b>${esc(current)}</b>.\nSend the name to show instead:`
+        : '✏️ <b>What should we call you?</b>\nSend your name:',
+      { parse_mode: 'HTML', reply_markup: kb },
+    );
+    for (;;) {
+      const u = await conversation.wait();
+      let newName: string | null;
+      if (u.callbackQuery?.data === 'convo:reset') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        newName = null;
+      } else if (u.callbackQuery?.data === 'self:ren') {
+        // Duplicate tap on the entry button — we're already asking. Just
+        // clear the spinner and keep waiting for the name.
+        await u.answerCallbackQuery().catch(() => undefined);
+        continue;
+      } else if (u.callbackQuery || (u.message?.text ?? '').startsWith('/')) {
+        // Any other tap or command exits quietly (plain cancel, no owner menu).
+        if (u.callbackQuery) await u.answerCallbackQuery().catch(() => undefined);
+        return void (await ctx.reply('✖ Cancelled.'));
+      } else {
+        const t = (u.message?.text ?? '').trim();
+        if (!t) {
+          await ctx.reply('Please send your name as text, or ✖ Cancel.', { reply_markup: kb });
+          continue;
+        }
+        if (t.length > 120) {
+          await ctx.reply('That name is too long (max 120). Try a shorter one.', {
+            reply_markup: kb,
+          });
+          continue;
+        }
+        newName = t;
+      }
+      try {
+        const count = await conversation.external(() =>
+          this.subscribers.renameSelf(BigInt(tgId), newName),
+        );
+        if (!count) {
+          await ctx.reply(
+            "You're not subscribed to anything yet — open an invite link first.",
+          );
+          return;
+        }
+        await ctx.reply(
+          newName
+            ? `✅ Done — you'll now appear as <b>${esc(newName)}</b>.`
+            : '✅ Done — your Telegram profile name will be shown.',
+          { parse_mode: 'HTML' },
+        );
+      } catch (err) {
+        await ctx.reply(`⚠️ ${esc(humanError(err))}`, { parse_mode: 'HTML' });
+      }
+      return;
+    }
   };
 
   /** A subscriber taps “Answer” → capture one free-text reply and record it. */

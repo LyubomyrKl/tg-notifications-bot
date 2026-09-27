@@ -108,6 +108,7 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
     if (subs.length) {
       await ctx.reply(this.adminMenu.consumerMessage(subs.map((s) => s.sourceName)), {
         parse_mode: 'HTML',
+        reply_markup: this.adminMenu.consumerKeyboard(),
       });
       return;
     }
@@ -172,9 +173,12 @@ export class BotRunner implements OnApplicationBootstrap, OnModuleDestroy {
       const headline = result.alreadyJoined
         ? `👋 You're already subscribed to "${result.sourceName}".`
         : `🎉 Subscribed to "${result.sourceName}"${group}.`;
+      // The name button right at join: the owner gets a real name instead of
+      // whatever the Telegram profile happens to say.
       await ctx.reply(
         `${headline}\n\nUpdates arrive right here — no commands needed. Tap the ` +
           'buttons on messages to respond, or send /stop anytime to leave.',
+        { reply_markup: this.adminMenu.consumerKeyboard() },
       );
     } catch (err) {
       if (

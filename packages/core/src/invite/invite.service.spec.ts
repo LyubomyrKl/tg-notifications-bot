@@ -59,6 +59,14 @@ function makeFakePrisma() {
       },
     },
     subscriber: {
+      findFirst: async ({ where }: any) =>
+        subscribers.find((s) =>
+          Object.entries(where).every(([k, v]: [string, any]) =>
+            v && typeof v === 'object' && 'not' in v
+              ? s[k] !== v.not
+              : s[k] === v,
+          ),
+        ) ?? null,
       upsert: async ({ where, create, update }: any) => {
         const key = where.sourceId_telegramUserId;
         let s = subscribers.find(

@@ -26,7 +26,9 @@ export class SubscriberService {
   /**
    * Idempotently create-or-refresh a subscriber for a workspace. `username` and
    * `name` come from Telegram and are refreshed when provided; the admin-set
-   * `customName` is never touched here.
+   * `customName` and the subscriber's own `selfName` are never touched here —
+   * except that a row created by a later join inherits the person's `selfName`
+   * from their existing rows, so the one-name-per-person invariant holds.
    */
   async upsert(
     sourceId: string,
@@ -34,6 +36,10 @@ export class SubscriberService {
     username?: string,
     name?: string,
   ): Promise<Subscriber> {
+    const sibling = await this.prisma.subscriber.findFirst({
+      where: { telegramUserId, selfName: { not: null } },
+      select: { selfName: true },
+    });
     return this.prisma.subscriber.upsert({
       where: { sourceId_telegramUserId: { sourceId, telegramUserId } },
       create: {
@@ -41,6 +47,7 @@ export class SubscriberService {
         telegramUserId,
         username: username ?? null,
         name: name ?? null,
+        selfName: sibling?.selfName ?? null,
       },
       update: {
         ...(username !== undefined && { username }),
@@ -99,7 +106,7 @@ export class SubscriberService {
     }));
   }
 
-  /** Admin display override; `customName: null` reverts to the Telegram name. */
+  /** Admin display override; `customName: null` reverts to the subscriber's own name. */
   async rename(
     sourceId: string,
     subscriberId: string,
@@ -114,6 +121,34 @@ export class SubscriberService {
       data: { customName: customName?.trim() || null },
     });
     return this.toView(updated);
+  }
+
+  /**
+   * Subscriber-chosen display name, set from the bot chat. The person talks to
+   * ONE bot (not our per-workspace rows), so it applies to every workspace row
+   * of this Telegram user — unsubscribed ones included, so the name survives a
+   * rejoin. `null` reverts to the Telegram profile name. An owner's
+   * per-workspace `customName` still wins where set. Returns the number of
+   * rows touched (0 = this Telegram user is unknown to any workspace).
+   */
+  async renameSelf(
+    telegramUserId: bigint,
+    selfName: string | null,
+  ): Promise<number> {
+    const { count } = await this.prisma.subscriber.updateMany({
+      where: { telegramUserId },
+      data: { selfName: selfName?.trim() || null },
+    });
+    return count;
+  }
+
+  /** This Telegram user's current self-chosen name, if any (same across rows). */
+  async selfNameByTelegramId(telegramUserId: bigint): Promise<string | null> {
+    const row = await this.prisma.subscriber.findFirst({
+      where: { telegramUserId },
+      select: { selfName: true },
+    });
+    return row?.selfName ?? null;
   }
 
   async list(
@@ -214,6 +249,7 @@ export class SubscriberService {
       username: s.username,
       name: s.name,
       customName: s.customName,
+      selfName: s.selfName,
       displayName: subscriberDisplayName(s),
       status: s.status,
       joinedAt: s.joinedAt.toISOString(),
@@ -223,13 +259,18 @@ export class SubscriberService {
 
 /**
  * The one label to show for a subscriber, everywhere: admin override first,
- * then the Telegram profile name, then @username, then the raw Telegram id.
+ * then the name they chose for themselves, then the Telegram profile name,
+ * then @username, then the raw Telegram id.
  */
 export function subscriberDisplayName(
-  s: Pick<Subscriber, 'customName' | 'name' | 'username' | 'telegramUserId'>,
+  s: Pick<
+    Subscriber,
+    'customName' | 'selfName' | 'name' | 'username' | 'telegramUserId'
+  >,
 ): string {
   return (
     s.customName?.trim() ||
+    s.selfName?.trim() ||
     s.name?.trim() ||
     (s.username ? `@${s.username}` : s.telegramUserId.toString())
   );

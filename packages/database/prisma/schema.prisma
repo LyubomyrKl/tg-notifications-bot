@@ -138,6 +138,11 @@ model Subscriber {
   /// Admin-set display name. Wins over `name`/`username` everywhere; never
   /// touched by automatic identity refreshes.
   customName     String?
+  /// Subscriber-chosen display name, set from the bot chat. One person = one
+  /// name, so it's kept in sync across their rows in every workspace. Sits
+  /// between customName and name in display precedence; never touched by
+  /// automatic identity refreshes.
+  selfName       String?
   status         SubscriberStatus @default(active)
   unsubscribedAt DateTime?
   pendingDelete  Boolean          @default(false)

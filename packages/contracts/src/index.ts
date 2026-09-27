@@ -122,9 +122,11 @@ export const SubscriberView = z.object({
   username: z.string().nullable(),
   /** Telegram profile name captured at join / refreshed on interactions. */
   name: z.string().nullable(),
-  /** Admin-set override; wins over `name` and `username`. */
+  /** Admin-set override; wins over everything else. */
   customName: z.string().nullable(),
-  /** Ready-to-render label: customName → name → @username → telegram id. */
+  /** Subscriber-chosen name (set in the bot chat); below customName, above name. */
+  selfName: z.string().nullable(),
+  /** Ready-to-render label: customName → selfName → name → @username → telegram id. */
   displayName: z.string(),
   status: z.enum(['active', 'unsubscribed']),
   joinedAt: z.string(),
