@@ -145,12 +145,17 @@ export class InviteService {
   ): Promise<InviteOpenResult> {
     const link = await this.prisma.inviteLink.findUnique({
       where: { token },
-      include: { group: true },
+      include: { group: true, source: { select: { archivedAt: true } } },
     });
     if (!link) throw new NotFoundException('Invalid invite link');
     if (link.revokedAt) throw new BadRequestException('This link was revoked');
     if (link.expiresAt && link.expiresAt <= now) {
       throw new BadRequestException('This link has expired');
+    }
+    // An archived workspace is dead everywhere else (resolve/link all filter it) —
+    // its invite links must not keep subscribing people into a closed workspace.
+    if (link.source.archivedAt) {
+      throw new BadRequestException('This workspace is no longer active');
     }
 
     // Subscribe to the LINK's source (re-activating a prior unsubscribe — opening

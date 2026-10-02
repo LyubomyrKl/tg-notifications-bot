@@ -104,10 +104,27 @@ export class AdminMenu {
   /** Wire the menu onto the bot. Call after command handlers are registered. */
   register(bot: Bot): void {
     // Command shortcuts that jump straight to a menu screen — from the registry.
-    for (const c of this.menuCommandDefs) bot.command(c.command, (ctx) => c.run(ctx));
+    // Wrapped so a thrown error replies to the owner instead of vanishing into
+    // bot.catch (which only logs) and leaving the tap with no feedback.
+    for (const c of this.menuCommandDefs) {
+      bot.command(c.command, (ctx) => this.runCommand(ctx, c.run));
+    }
     // Callbacks + free-text must come after commands so commands win.
     bot.on('callback_query:data', (ctx) => this.onCallback(ctx));
     bot.on('message:text', (ctx) => this.onText(ctx));
+  }
+
+  /** Run a slash-command handler, surfacing any failure as a friendly reply. */
+  private async runCommand(
+    ctx: Context,
+    run: (ctx: Context) => Promise<void>,
+  ): Promise<void> {
+    try {
+      await run(ctx);
+    } catch (err) {
+      this.logger.error(`command failed: ${(err as Error).message}`);
+      await ctx.reply(`⚠️ ${esc(humanError(err))}`, { parse_mode: 'HTML' }).catch(() => undefined);
+    }
   }
 
   /** /notifications, /groups, /links → open the matching list as a fresh card. */
@@ -182,6 +199,10 @@ export class AdminMenu {
   async openHome(ctx: Context, edit: boolean): Promise<void> {
     const principal = await this.requireOwner(ctx);
     if (!principal) return;
+    // Landing on home is a fresh start — drop any half-built broadcast draft so a
+    // stale target/message can't resurrect into a later compose ("✖ Cancel" → home
+    // leads here, which is how an abandoned draft gets discarded).
+    if (ctx.from) getSession(ctx.from.id).broadcast = undefined;
     await this.render(ctx, '<b>🏠 Menu</b>\nWhat would you like to do?', this.homeKeyboard(), edit);
   }
 
@@ -1434,7 +1455,7 @@ export class AdminMenu {
     let name = '';
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = (u.message?.text ?? '').trim();
       if (!t) {
         await ctx.reply('Please send a name as text, or ✖ Cancel.', { reply_markup: cancel });
@@ -1455,7 +1476,7 @@ export class AdminMenu {
     let body = '';
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = u.message?.text;
       if (!t) {
         await ctx.reply('Please send the body as text, or ✖ Cancel.', { reply_markup: cancel });
@@ -1514,7 +1535,7 @@ export class AdminMenu {
         await u.answerCallbackQuery().catch(() => undefined);
         break;
       }
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = (u.message?.text ?? '').trim();
       if (!t) {
         await ctx.reply('Send a name, or ↩️ Keep / ✖ Cancel.', { reply_markup: kb });
@@ -1535,7 +1556,7 @@ export class AdminMenu {
         await u.answerCallbackQuery().catch(() => undefined);
         break;
       }
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = u.message?.text;
       if (!t) {
         await ctx.reply('Send a body, or ↩️ Keep / ✖ Cancel.', { reply_markup: kb });
@@ -1573,7 +1594,7 @@ export class AdminMenu {
     });
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = (u.message?.text ?? '').trim();
       if (!t) {
         await ctx.reply('Please send a name, or ✖ Cancel.', { reply_markup: cancel });
@@ -1609,7 +1630,15 @@ export class AdminMenu {
     const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
     const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
     if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
-    const n = await conversation.external(() => this.notifications.get(sourceId, notifId));
+    let n: NotificationView;
+    try {
+      n = await conversation.external(() => this.notifications.get(sourceId, notifId));
+    } catch {
+      // The template was archived/deleted between tapping the button and here.
+      return void (await ctx.reply('That message no longer exists.', {
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
     const values: Record<string, string> = {};
     for (const ph of n.placeholders) {
       await ctx.reply(`✏️ Value for <b>{${esc(ph)}}</b>:`, {
@@ -1618,7 +1647,7 @@ export class AdminMenu {
       });
       for (;;) {
         const u = await conversation.wait();
-        if (this.isCancel(u)) return this.cancelled(ctx, u);
+        if (await this.isCancel(u)) return this.cancelled(ctx, u);
         const t = u.message?.text;
         if (t === undefined || t === '') {
           await ctx.reply('Please send a value, or ✖ Cancel.', { reply_markup: cancel });
@@ -1682,7 +1711,7 @@ export class AdminMenu {
     let body = '';
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = u.message?.text;
       if (!t || !t.trim()) {
         await ctx.reply('Please send the message as text, or ✖ Cancel.', {
@@ -1727,7 +1756,7 @@ export class AdminMenu {
     let extra = '';
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = u.message?.text;
       if (!t || !t.trim()) {
         await ctx.reply('Please send the text to add, or ✖ Cancel.', { reply_markup: cancel });
@@ -1782,7 +1811,7 @@ export class AdminMenu {
         ephemeral = d === 'convo:save:once';
         break;
       }
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       await ctx.reply(`Tap “Just this once” or “${saveVerb}”.`, { reply_markup: modeKb });
     }
 
@@ -1870,7 +1899,7 @@ export class AdminMenu {
     let body = '';
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const t = u.message?.text;
       if (!t || !t.trim()) {
         await ctx.reply('Please send the new text, or ✖ Cancel.', { reply_markup: cancel });
@@ -1901,7 +1930,7 @@ export class AdminMenu {
         permanent = d === 'convo:save:keep';
         break;
       }
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       await ctx.reply('Tap “Just this send” or “Update template”.', { reply_markup: modeKb });
     }
 
@@ -1962,7 +1991,7 @@ export class AdminMenu {
         await u.answerCallbackQuery().catch(() => undefined);
         newName = null;
       } else {
-        if (this.isCancel(u)) return this.cancelled(ctx, u);
+        if (await this.isCancel(u)) return this.cancelled(ctx, u);
         const t = (u.message?.text ?? '').trim();
         if (!t) {
           await ctx.reply('Please send a name as text, or ✖ Cancel.', { reply_markup: kb });
@@ -2010,7 +2039,7 @@ export class AdminMenu {
     let options: string[] = [];
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       options = (u.message?.text ?? '')
         .split(/[\n,]/)
         .map((s) => s.trim())
@@ -2112,7 +2141,13 @@ export class AdminMenu {
     }
   };
 
-  /** A subscriber taps “Answer” → capture one free-text reply and record it. */
+  /**
+   * A subscriber taps “Answer” → capture one free-text reply and record it.
+   * Subscriber-facing, so while they're typing we still honour the buttons that
+   * ride along on other messages: a poll vote is recorded inline (not swallowed),
+   * a stray Answer tap is ignored, /stop actually unsubscribes, and ✖ Cancel /
+   * other commands exit quietly.
+   */
   private answerQuestionConvo = async (
     conversation: Conv,
     ctx: Context,
@@ -2120,23 +2155,61 @@ export class AdminMenu {
   ): Promise<void> => {
     const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
     await ctx.reply('✍️ Type your answer:', { reply_markup: cancel });
+    const tgId = ctx.from!.id;
     let answer = '';
     for (;;) {
       const u = await conversation.wait();
-      // Subscriber-facing: a plain cancel (no owner menu).
-      if (u.callbackQuery || (u.message?.text ?? '').startsWith('/')) {
+      const data = u.callbackQuery?.data ?? '';
+      const [ns, cbBroadcastId, idxRaw] = data.split(':');
+
+      // A poll vote on another message must NOT be lost just because an answer
+      // prompt is open — record it inline and keep waiting for the answer.
+      if (ns === 'rv') {
+        try {
+          const { label } = await conversation.external(() =>
+            this.responses.recordVote(cbBroadcastId, tgId, parseInt(idxRaw, 10)),
+          );
+          await u.answerCallbackQuery({ text: `✅ Recorded: ${label}` }).catch(() => undefined);
+        } catch (err) {
+          await u
+            .answerCallbackQuery({ text: `⚠️ ${humanError(err)}`, show_alert: true })
+            .catch(() => undefined);
+        }
+        continue;
+      }
+      // A stray tap on an Answer button (incl. double-tapping this one) — we're
+      // already collecting an answer; just clear the spinner and keep waiting.
+      if (ns === 'ra') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        continue;
+      }
+      if (data === 'convo:cancel') {
+        await u.answerCallbackQuery().catch(() => undefined);
+        return void (await ctx.reply('✖ Cancelled.'));
+      }
+      const text = u.message?.text ?? '';
+      // /stop mid-answer must actually unsubscribe (not be swallowed as a cancel).
+      if (text.startsWith('/stop')) {
+        const count = await conversation.external(() =>
+          this.subscribers.unsubscribeByTelegramId(BigInt(tgId)),
+        );
+        return void (await ctx.reply(
+          count > 0
+            ? "🛑 Unsubscribed. You won't receive further messages."
+            : "You weren't subscribed to anything.",
+        ));
+      }
+      if (text.startsWith('/') || u.callbackQuery) {
         if (u.callbackQuery) await u.answerCallbackQuery().catch(() => undefined);
         return void (await ctx.reply('✖ Cancelled.'));
       }
-      const t = u.message?.text;
-      if (!t || !t.trim()) {
+      if (!text.trim()) {
         await ctx.reply('Please send your answer as text, or ✖ Cancel.', { reply_markup: cancel });
         continue;
       }
-      answer = t;
+      answer = text;
       break;
     }
-    const tgId = ctx.from!.id;
     try {
       await conversation.external(() =>
         this.responses.recordText(broadcastId, tgId, answer),
@@ -2157,7 +2230,14 @@ export class AdminMenu {
     const cancel = new InlineKeyboard().text('✖ Cancel', 'convo:cancel');
     const sourceId = await conversation.external(() => this.ownerSourceId(ctx));
     if (!sourceId) return void (await ctx.reply('You are not connected to a workspace.'));
-    const n = await conversation.external(() => this.notifications.get(sourceId, notifId));
+    let n: NotificationView;
+    try {
+      n = await conversation.external(() => this.notifications.get(sourceId, notifId));
+    } catch {
+      return void (await ctx.reply('That message no longer exists.', {
+        reply_markup: this.homeKeyboard(),
+      }));
+    }
 
     // 1) When
     await ctx.reply(
@@ -2168,7 +2248,7 @@ export class AdminMenu {
     let sendAt: Date;
     for (;;) {
       const u = await conversation.wait();
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       const parsed = this.parseWhen(u.message?.text ?? '');
       if (!parsed) {
         await ctx.reply('Couldn’t read that. Try +2h, +30m, +1d, or 2026-07-05 14:30 (UTC).', { reply_markup: cancel });
@@ -2199,7 +2279,7 @@ export class AdminMenu {
         repeat = d.slice('convo:rep:'.length) as 'none' | 'daily' | 'weekly';
         break;
       }
-      if (this.isCancel(u)) return this.cancelled(ctx, u);
+      if (await this.isCancel(u)) return this.cancelled(ctx, u);
       await ctx.reply('Tap Once, Daily, or Weekly.', { reply_markup: repKb });
     }
 
@@ -2209,7 +2289,7 @@ export class AdminMenu {
       await ctx.reply(`✏️ Value for <b>{${esc(ph)}}</b>:`, { parse_mode: 'HTML', reply_markup: cancel });
       for (;;) {
         const u = await conversation.wait();
-        if (this.isCancel(u)) return this.cancelled(ctx, u);
+        if (await this.isCancel(u)) return this.cancelled(ctx, u);
         const t = u.message?.text;
         if (t === undefined || t === '') {
           await ctx.reply('Send a value, or ✖ Cancel.', { reply_markup: cancel });
@@ -2258,13 +2338,27 @@ export class AdminMenu {
     return null;
   }
 
-  /** Any button tap or command during a conversation cancels it. */
-  private isCancel(u: Context): boolean {
-    return !!u.callbackQuery || !!u.message?.text?.startsWith('/');
+  /**
+   * A guided flow is cancelled ONLY by its explicit ✖ Cancel button or a slash
+   * command (the user navigated away). Any OTHER stray callback — an old menu
+   * button, or a double-tap on the very button that opened this flow — is acked
+   * (so no spinner hangs) and ignored, so it can't silently kill the flow; the
+   * caller's loop then reprompts. (Fixes double-tap-cancels-the-conversation.)
+   */
+  private async isCancel(u: Context): Promise<boolean> {
+    if (u.message?.text?.startsWith('/')) return true;
+    if (u.callbackQuery) {
+      if (u.callbackQuery.data === 'convo:cancel') return true;
+      await u.answerCallbackQuery().catch(() => undefined); // clear spinner, ignore
+      return false;
+    }
+    return false;
   }
 
   private async cancelled(ctx: Context, u: Context): Promise<void> {
     if (u.callbackQuery) await u.answerCallbackQuery().catch(() => undefined);
+    // Cancelling a guided flow discards its in-progress broadcast draft too.
+    if (ctx.from) getSession(ctx.from.id).broadcast = undefined;
     await ctx.reply('✖ Cancelled.', { reply_markup: this.homeKeyboard() });
   }
 
@@ -2338,8 +2432,17 @@ export class AdminMenu {
       link_preview_options: { is_disabled: true },
     };
     if (edit && ctx.callbackQuery) {
-      // "message is not modified" just means same content — safe to ignore.
-      await ctx.editMessageText(text, opts).catch(() => undefined);
+      try {
+        await ctx.editMessageText(text, opts);
+      } catch (err) {
+        // "message is not modified" = same content, safe to ignore. Anything
+        // else (most often: the message is >48h old, which Telegram refuses to
+        // edit) → fall back to a fresh card so the tap isn't a silent dead end.
+        const desc = (err as { description?: string }).description ?? '';
+        if (!desc.includes('message is not modified')) {
+          await ctx.reply(text, opts).catch(() => undefined);
+        }
+      }
     } else {
       await ctx.reply(text, opts);
     }

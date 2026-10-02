@@ -82,8 +82,21 @@ function makeFakePrisma() {
           members.splice(i, 1);
         }
       },
-      count: async ({ where }: any) =>
-        members.filter((m) => whereMatch(m, where)).length,
+      count: async ({ where }: any) => {
+        // Support the nested `subscriber: { status }` filter memberCount uses:
+        // only count members whose subscriber matches (e.g. still active).
+        const subFilter = where.subscriber;
+        const rest = { ...where };
+        delete rest.subscriber;
+        return members.filter((m) => {
+          if (!whereMatch(m, rest)) return false;
+          if (subFilter) {
+            const s = subscribers.find((x) => x.id === m.subscriberId);
+            if (!s || !whereMatch(s, subFilter)) return false;
+          }
+          return true;
+        }).length;
+      },
       findMany: async () => [],
     },
     $transaction: async (ops: any[]) => Promise.all(ops),

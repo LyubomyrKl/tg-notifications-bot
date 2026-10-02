@@ -87,6 +87,14 @@ export class BroadcastDeliveryService {
         });
         return 'blocked';
       }
+      if (e.terminal) {
+        // Deterministic failure (e.g. message too long) — retrying is futile, so
+        // record it now instead of burning the whole attempt budget per recipient.
+        await this.finalize(recipientId, broadcastId, RecipientStatus.failed, {
+          error: e.message,
+        });
+        return 'skipped';
+      }
       // rate_limited / failed → retry. Carries retryAfter for the backoff.
       throw e;
     }
@@ -124,20 +132,27 @@ export class BroadcastDeliveryService {
           ? { blockedCount: { increment: 1 } }
           : { failedCount: { increment: 1 } };
 
-    await this.prisma.$transaction([
-      this.prisma.broadcastRecipient.update({
-        where: { id: recipientId },
+    // Guarded flip: only a recipient still `queued` transitions, and its counter
+    // bumps IN THE SAME TRANSACTION. A duplicated/stalled re-run finds the row
+    // already terminal (count === 0) and does nothing — so counters can't
+    // double-count (no more "Delivered to 2 of 1").
+    const applied = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.broadcastRecipient.updateMany({
+        where: { id: recipientId, status: RecipientStatus.queued },
         data: {
           status,
           error: extra.error ?? null,
           sentAt: extra.sentAt ?? null,
         },
-      }),
-      this.prisma.broadcast.update({
+      });
+      if (res.count === 0) return false;
+      await tx.broadcast.update({
         where: { id: broadcastId },
         data: { ...counter, status: BroadcastStatus.sending },
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!applied) return; // already finalized by another run — don't re-complete
 
     await this.completeIfDone(broadcastId);
   }
@@ -181,7 +196,6 @@ export class BroadcastDeliveryService {
       include: {
         notification: { select: { name: true } },
         source: { select: { telegramUserId: true } },
-        targets: { include: { group: { select: { name: true } } } },
       },
     });
     if (!broadcast?.source?.telegramUserId || broadcast.totalCount === 0) return;
@@ -194,12 +208,11 @@ export class BroadcastDeliveryService {
     const name = broadcast.notification?.name ?? 'message';
     const { sentCount: delivered, totalCount: total } = broadcast;
 
-    // Audience label: targeted group names when groups were picked; otherwise
-    // the directly-picked people by name. Capped so the report stays skimmable.
-    const audienceNames = broadcast.targets.length
-      ? broadcast.targets
-          .map((t) => t.group?.name)
-          .filter((x): x is string => !!x)
+    // Audience label: targeted group names (snapshotted at send time, so this
+    // holds even if a group was later deleted); otherwise the directly-picked
+    // people by name. Capped so the report stays skimmable.
+    const audienceNames = broadcast.groupNames.length
+      ? broadcast.groupNames
       : recipients.map((r) => subscriberDisplayName(r.subscriber));
     const shownNames = audienceNames.slice(0, 3).join(', ');
     const audience =

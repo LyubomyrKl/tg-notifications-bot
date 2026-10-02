@@ -28,6 +28,13 @@ export const AuthResult = z.object({
 });
 export type AuthResult = z.infer<typeof AuthResult>;
 
+/** Registration also mints the workspace's REST API key — shown here exactly
+ *  once (only the hash is stored), so the operator can hand it off. */
+export const RegisterResult = AuthResult.extend({
+  apiKey: z.string(),
+});
+export type RegisterResult = z.infer<typeof RegisterResult>;
+
 // ── Source provisioning ─────────────────────────────────────────────────────
 export const CreateSourceInput = z.object({
   ownerEmail: z.string().email(),
@@ -59,10 +66,14 @@ const MediaInput = z.object({
   mediaType: z.string().min(1).max(40),
 });
 
+/** Telegram's hard cap on a single text message. A longer body fails every
+ *  recipient at send time, so we reject it up front. */
+export const MAX_MESSAGE_LENGTH = 4096;
+
 export const CreateNotificationInput = z
   .object({
     name: z.string().min(1).max(160),
-    body: z.string().min(1),
+    body: z.string().min(1).max(MAX_MESSAGE_LENGTH),
   })
   .merge(MediaInput.partial());
 export type CreateNotificationInput = z.infer<typeof CreateNotificationInput>;
@@ -237,6 +248,8 @@ export const BroadcastView = z.object({
   notificationId: z.string(),
   status: z.enum(['queued', 'sending', 'completed', 'failed']),
   groupIds: z.array(z.string()),
+  /** Snapshot of targeted group names at send time — survives group deletion. */
+  groupNames: z.array(z.string()),
   interaction: InteractionView,
   responseCount: z.number().int().nonnegative(),
   createdBy: z.string(),
@@ -313,7 +326,7 @@ export const ScheduledBroadcastView = z.object({
   groupIds: z.array(z.string()),
   sendAt: z.string(),
   repeat: RepeatKind,
-  status: z.enum(['scheduled', 'completed', 'cancelled']),
+  status: z.enum(['scheduled', 'completed', 'cancelled', 'failed']),
   createdBy: z.string(),
   lastRunAt: z.string().nullable(),
   createdAt: z.string(),

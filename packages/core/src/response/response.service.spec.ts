@@ -34,6 +34,13 @@ function makeFake() {
   const subscribers: any[] = [
     { id: 's1', sourceId: 'src_A', telegramUserId: 111n, username: 'ada', status: 'active' },
     { id: 's2', sourceId: 'src_A', telegramUserId: 222n, username: null, status: 'unsubscribed' },
+    // Active in the workspace but NOT a recipient of any broadcast below.
+    { id: 's4', sourceId: 'src_A', telegramUserId: 444n, username: 'eve', status: 'active' },
+  ];
+  // s1 was actually sent both interactive broadcasts; s4 was not.
+  const recipients: any[] = [
+    { broadcastId: 'b_poll', subscriberId: 's1' },
+    { broadcastId: 'b_q', subscriberId: 's1' },
   ];
   const sources: any[] = [{ id: 'src_A', telegramUserId: 999n }];
   const notifications: any[] = [{ id: 'n1', name: 'Weekly check-in' }];
@@ -52,6 +59,16 @@ function makeFake() {
         return (
           subscribers.find(
             (s) => s.sourceId === sourceId && s.telegramUserId === telegramUserId,
+          ) ?? null
+        );
+      },
+    },
+    broadcastRecipient: {
+      findUnique: async ({ where }: any) => {
+        const { broadcastId, subscriberId } = where.broadcastId_subscriberId;
+        return (
+          recipients.find(
+            (r) => r.broadcastId === broadcastId && r.subscriberId === subscriberId,
           ) ?? null
         );
       },
@@ -136,6 +153,18 @@ describe('ResponseService', () => {
       ForbiddenException,
     );
     await expect(svc.recordVote('b_poll', 222, 0)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('rejects a response from an active subscriber who was not a recipient', async () => {
+    const { svc } = makeFake();
+    // s4 (444) is active in the workspace but was never sent this poll — a
+    // forged callback must not let them skew a poll aimed at another group.
+    await expect(svc.recordVote('b_poll', 444, 0)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(svc.recordText('b_q', 444, 'sneaky')).rejects.toBeInstanceOf(
       ForbiddenException,
     );
   });

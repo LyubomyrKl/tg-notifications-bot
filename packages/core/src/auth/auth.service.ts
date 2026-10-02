@@ -7,6 +7,7 @@ import type {
   AuthResult,
   LoginInput,
   RegisterInput,
+  RegisterResult,
 } from '@paedavic/contracts';
 import { PrismaService } from '@paedavic/database';
 import {
@@ -30,7 +31,7 @@ export class AuthService {
     private readonly tokens: TokenService,
   ) {}
 
-  async register(input: RegisterInput): Promise<AuthResult> {
+  async register(input: RegisterInput): Promise<RegisterResult> {
     const existing = await this.prisma.user.findUnique({
       where: { email: input.email },
     });
@@ -59,6 +60,9 @@ export class AuthService {
       token: this.tokens.sign(user.id),
       user: { id: user.id, email: user.email },
       source: { id: source.id, name: source.name },
+      // Shown once — only the hash is persisted. Without this, a registered
+      // workspace's API key was unknowable and the workspace unusable via REST.
+      apiKey: apiKey.key,
     };
   }
 

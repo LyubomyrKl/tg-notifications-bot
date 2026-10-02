@@ -12,7 +12,7 @@ function makeFakePrisma() {
   const joins: any[] = [];
   const members: any[] = [];
   const subscribers: any[] = [];
-  const sources: any[] = [{ id: 'src_A', name: 'Acme' }];
+  const sources: any[] = [{ id: 'src_A', name: 'Acme', archivedAt: null }];
   let sseq = 0;
 
   const self: any = {
@@ -24,8 +24,14 @@ function makeFakePrisma() {
       findUnique: async ({ where, include }: any) => {
         const l = links.find((x) => x.token === where.token || x.id === where.id);
         if (!l) return null;
-        if (include?.group)
-          return { ...l, group: l.groupId ? { name: 'VIP' } : null };
+        if (include?.group || include?.source) {
+          const src = sources.find((s) => s.id === l.sourceId);
+          return {
+            ...l,
+            group: include?.group && l.groupId ? { name: 'VIP' } : null,
+            source: include?.source ? { archivedAt: src?.archivedAt ?? null } : undefined,
+          };
+        }
         return l;
       },
       update: async ({ where, data }: any) => {

@@ -3,6 +3,7 @@ import { CoreModule } from '@paedavic/core';
 import { BearerAuthGuard } from './auth/bearer-auth.guard';
 import { SuperAdminGuard } from './auth/super-admin.guard';
 import { BotModule } from './bot/bot.module';
+import { AuthThrottleGuard } from './common/throttle.guard';
 import { AuditController } from './http/audit.controller';
 import { AuthController } from './http/auth.controller';
 import { BroadcastController } from './http/broadcast.controller';
@@ -28,6 +29,6 @@ import { SubscriberController } from './http/subscriber.controller';
     ScheduledBroadcastController,
     AuditController,
   ],
-  providers: [SuperAdminGuard, BearerAuthGuard],
+  providers: [SuperAdminGuard, BearerAuthGuard, AuthThrottleGuard],
 })
 export class AppModule {}

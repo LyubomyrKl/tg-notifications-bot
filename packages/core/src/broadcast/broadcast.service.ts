@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type {
   BroadcastDetail,
   BroadcastView,
@@ -51,6 +55,10 @@ export class BroadcastService {
     // Namespacing the sendKey per source makes the global unique = per-tenant.
     const scopedKey = `${sourceId}:${input.sendKey}`;
 
+    // The HTTP layer validates interaction shape via zod, but the bot calls this
+    // service directly — so enforce the same rule here at the trust boundary.
+    this.validateInteraction(input.interaction);
+
     // Idempotency: same key → return the existing broadcast instead of
     // re-sending. But first heal the half-created case: rows committed, then a
     // crash/Redis blip before enqueue left it stuck `queued` with no jobs — a
@@ -77,6 +85,10 @@ export class BroadcastService {
       sourceId,
       input,
     );
+    // Snapshot group names now so the history/report survives a later deletion.
+    const groupNames = groupIds
+      .map((id) => groups.find((g) => g.id === id)?.name)
+      .filter((n): n is string => !!n);
 
     // Resolve recipients NOW (active only): union of the targeted groups' members
     // and any directly-targeted subscribers, deduped.
@@ -99,6 +111,7 @@ export class BroadcastService {
           createdBy,
           interaction: input.interaction?.type ?? InteractionType.none,
           pollOptions: input.interaction?.options ?? [],
+          groupNames,
           totalCount: subscribers.length,
           status: subscribers.length
             ? BroadcastStatus.queued
@@ -164,6 +177,25 @@ export class BroadcastService {
       );
     }
     return queued.length;
+  }
+
+  /** Mirror of the zod BroadcastInteractionInput rule, for the bot's direct
+   *  (non-HTTP) calls: a poll needs 2–4 non-empty options, a question needs none. */
+  private validateInteraction(
+    interaction: CreateBroadcastInput['interaction'],
+  ): void {
+    if (!interaction) return;
+    const options = interaction.options ?? [];
+    if (interaction.type === 'poll') {
+      if (options.length < 2 || options.length > 4) {
+        throw new BadRequestException('A poll needs 2–4 options');
+      }
+      if (options.some((o) => !o.trim() || o.length > 64)) {
+        throw new BadRequestException('Each poll option must be 1–64 characters');
+      }
+    } else if (interaction.type === 'question' && options.length > 0) {
+      throw new BadRequestException('A question takes no options');
+    }
   }
 
   async list(sourceId: string): Promise<BroadcastView[]> {
@@ -245,6 +277,7 @@ export class BroadcastService {
       notificationId: b.notificationId,
       status: b.status,
       groupIds: b.targets.map((t) => t.groupId),
+      groupNames: b.groupNames,
       interaction: { type: b.interaction, options: b.pollOptions },
       responseCount: b._count?.responses ?? 0,
       createdBy: b.createdBy,

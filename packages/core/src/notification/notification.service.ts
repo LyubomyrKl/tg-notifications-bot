@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import type {
-  CreateNotificationInput,
-  NotificationView,
-  UpdateNotificationInput,
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  type CreateNotificationInput,
+  MAX_MESSAGE_LENGTH,
+  type NotificationView,
+  type UpdateNotificationInput,
 } from '@paedavic/contracts';
 import { type Notification, PrismaService } from '@paedavic/database';
 import { parsePlaceholders, renderTemplate } from './placeholder.util';
@@ -17,10 +18,21 @@ import { parsePlaceholders, renderTemplate } from './placeholder.util';
 export class NotificationService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Reject a body Telegram would refuse to send. Enforced here (not just in the
+   *  zod contract) because the bot composer calls these methods directly. */
+  private assertBodyLength(body: string): void {
+    if (body.length > MAX_MESSAGE_LENGTH) {
+      throw new BadRequestException(
+        `Message is too long (${body.length}/${MAX_MESSAGE_LENGTH} characters).`,
+      );
+    }
+  }
+
   async create(
     sourceId: string,
     input: CreateNotificationInput,
   ): Promise<NotificationView> {
+    this.assertBodyLength(input.body);
     const created = await this.prisma.notification.create({
       data: {
         sourceId,
@@ -62,6 +74,7 @@ export class NotificationService {
     sourceId: string,
     input: { body: string; name?: string; ephemeral?: boolean },
   ): Promise<NotificationView> {
+    this.assertBodyLength(input.body);
     const name = (input.name?.trim() || deriveName(input.body)).slice(0, 160);
     const created = await this.prisma.notification.create({
       data: {
@@ -85,6 +98,7 @@ export class NotificationService {
     input: UpdateNotificationInput,
   ): Promise<NotificationView> {
     await this.findOwned(sourceId, id); // ownership check before mutate
+    if (input.body !== undefined) this.assertBodyLength(input.body);
     const updated = await this.prisma.notification.update({
       where: { id },
       data: {

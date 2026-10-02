@@ -7,6 +7,7 @@ describe('RecoveryService.sweep', () => {
     scheduled?: any[];
     stuckBroadcasts?: any[];
     requeued?: number;
+    erased?: number;
   }) {
     const prisma = {
       scheduledBroadcast: {
@@ -14,6 +15,9 @@ describe('RecoveryService.sweep', () => {
       },
       broadcast: {
         findMany: jest.fn().mockResolvedValue(opts.stuckBroadcasts ?? []),
+      },
+      subscriber: {
+        deleteMany: jest.fn().mockResolvedValue({ count: opts.erased ?? 0 }),
       },
     };
     const scheduleQueue = {
@@ -71,13 +75,26 @@ describe('RecoveryService.sweep', () => {
     expect(delivery.completeIfDone).toHaveBeenCalledWith('b1');
   });
 
+  it('erases pendingDelete subscribers past the grace window', async () => {
+    const { svc, prisma } = makeFakes({ erased: 2 });
+    await svc.sweep();
+
+    expect(prisma.subscriber.deleteMany).toHaveBeenCalledTimes(1);
+    const where = prisma.subscriber.deleteMany.mock.calls[0][0].where;
+    expect(where.pendingDelete).toBe(true);
+    expect(where.status).toBe('unsubscribed');
+    expect(where.unsubscribedAt.lt).toBeInstanceOf(Date);
+  });
+
   it('does nothing when the world is consistent', async () => {
-    const { svc, scheduleQueue, broadcasts, delivery } = makeFakes({});
+    const { svc, scheduleQueue, broadcasts, delivery, prisma } = makeFakes({});
     await svc.sweep();
 
     expect(scheduleQueue.scheduleOnce).not.toHaveBeenCalled();
     expect(scheduleQueue.scheduleRepeat).not.toHaveBeenCalled();
     expect(broadcasts.requeueStuckRecipients).not.toHaveBeenCalled();
     expect(delivery.completeIfDone).not.toHaveBeenCalled();
+    // deleteMany still runs (cheap, scoped) but reports 0 erased.
+    expect(prisma.subscriber.deleteMany).toHaveBeenCalledTimes(1);
   });
 });

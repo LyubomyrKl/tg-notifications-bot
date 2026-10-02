@@ -43,10 +43,7 @@ export class ResponseService {
     if (optionIndex < 0 || optionIndex >= broadcast.pollOptions.length) {
       throw new BadRequestException('Unknown option');
     }
-    const subscriber = await this.requireActiveSubscriber(
-      broadcast.sourceId,
-      telegramUserId,
-    );
+    const subscriber = await this.requireRecipient(broadcast, telegramUserId);
 
     await this.prisma.broadcastResponse.upsert({
       where: {
@@ -78,10 +75,7 @@ export class ResponseService {
     );
     const trimmed = text.trim();
     if (!trimmed) throw new BadRequestException('Empty answer');
-    const subscriber = await this.requireActiveSubscriber(
-      broadcast.sourceId,
-      telegramUserId,
-    );
+    const subscriber = await this.requireRecipient(broadcast, telegramUserId);
 
     await this.prisma.broadcastResponse.upsert({
       where: {
@@ -150,17 +144,38 @@ export class ResponseService {
     return broadcast;
   }
 
-  private async requireActiveSubscriber(
-    sourceId: string,
+  /**
+   * The responder must be an ACTIVE subscriber of the broadcast's workspace AND
+   * an actual recipient of this broadcast — not just anyone in the workspace who
+   * got hold of a broadcastId. Without the recipient check, a subscriber in a
+   * different group could forge a callback and skew a poll they were never sent.
+   */
+  private async requireRecipient(
+    broadcast: Broadcast,
     telegramUserId: number | bigint,
   ): Promise<Subscriber> {
     const subscriber = await this.prisma.subscriber.findUnique({
       where: {
-        sourceId_telegramUserId: { sourceId, telegramUserId: BigInt(telegramUserId) },
+        sourceId_telegramUserId: {
+          sourceId: broadcast.sourceId,
+          telegramUserId: BigInt(telegramUserId),
+        },
       },
     });
     if (!subscriber || subscriber.status !== SubscriberStatus.active) {
       throw new ForbiddenException('You are not subscribed to this workspace');
+    }
+    const recipient = await this.prisma.broadcastRecipient.findUnique({
+      where: {
+        broadcastId_subscriberId: {
+          broadcastId: broadcast.id,
+          subscriberId: subscriber.id,
+        },
+      },
+      select: { id: true },
+    });
+    if (!recipient) {
+      throw new ForbiddenException('This message was not sent to you');
     }
     return subscriber;
   }

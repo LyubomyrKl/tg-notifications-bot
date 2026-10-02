@@ -24,7 +24,7 @@ function setup(opts: {
     sentCount: 0,
     failedCount: 0,
     blockedCount: 0,
-    targets: [],
+    groupNames: [],
   };
   const recipients = [recipient];
 
@@ -36,10 +36,15 @@ function setup(opts: {
         recipients.filter((r) =>
           where.status?.not ? r.status !== where.status.not : true,
         ),
-      update: async ({ where, data }: any) => {
-        const r = recipients.find((x) => x.id === where.id)!;
+      // Guarded flip: only a still-queued recipient transitions (matches the
+      // real finalize, which uses updateMany with a status guard).
+      updateMany: async ({ where, data }: any) => {
+        const r = recipients.find((x) => x.id === where.id);
+        if (!r || (where.status && r.status !== where.status)) {
+          return { count: 0 };
+        }
         Object.assign(r, data);
-        return r;
+        return { count: 1 };
       },
       count: async ({ where }: any) =>
         recipients.filter((r) => r.status === where.status).length,
@@ -70,7 +75,10 @@ function setup(opts: {
     notification: {
       findUnique: async () => ({ id: 'n1', body: 'Hi {name}' }),
     },
-    $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
+    // Supports both forms: the interactive callback (finalize) and the legacy
+    // array form, so either style of caller works against this fake.
+    $transaction: async (arg: any) =>
+      typeof arg === 'function' ? arg(prisma) : Promise.all(arg),
   };
 
   return { prisma, recipient, recipients, broadcast };
@@ -177,10 +185,8 @@ describe('BroadcastDeliveryService', () => {
 
   it('a group send reports the targeted group names', async () => {
     const { prisma, recipient, recipients, broadcast } = setup({});
-    broadcast.targets = [
-      { group: { name: 'Potik-3' } },
-      { group: { name: 'VIP' } },
-    ];
+    // Snapshotted at send time — survives a later group deletion.
+    broadcast.groupNames = ['Potik-3', 'VIP'];
     recipients.push({
       ...recipient,
       id: 'r2',

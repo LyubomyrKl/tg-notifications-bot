@@ -4,6 +4,7 @@ import {
   BroadcastStatus,
   PrismaService,
   ScheduledStatus,
+  SubscriberStatus,
 } from '@paedavic/database';
 import { ScheduleQueue } from '@paedavic/queue';
 import { BroadcastDeliveryService } from '../broadcast/broadcast-delivery.service';
@@ -15,6 +16,9 @@ import { buildCronPattern } from '../schedule/schedule.service';
 const STUCK_GRACE_MS = 5 * 60_000;
 /** Background sweep cadence (the boot sweep runs immediately). */
 const SWEEP_INTERVAL_MS = 10 * 60_000;
+/** Grace after `/stop` before a pendingDelete subscriber is actually erased.
+ *  Generous, so an accidental /stop followed by a re-join loses nothing. */
+const ERASURE_GRACE_MS = 30 * 24 * 3600_000; // 30 days
 
 /**
  * Self-healing for the two queue/DB seams that can silently desync:
@@ -68,6 +72,7 @@ export class RecoveryService implements OnModuleDestroy {
   async sweep(): Promise<void> {
     await this.reregisterSchedules();
     await this.requeueStuckBroadcasts();
+    await this.erasePendingDeletes();
   }
 
   /** Make sure every live scheduled row has its Redis trigger. */
@@ -112,6 +117,27 @@ export class RecoveryService implements OnModuleDestroy {
         // Every recipient is terminal — only the completion update is missing.
         await this.delivery.completeIfDone(b.id);
       }
+    }
+  }
+
+  /**
+   * Honour the `/stop` erasure contract: subscribers flagged `pendingDelete`
+   * whose unsubscribe is older than the grace period are hard-deleted (cascades
+   * remove their group memberships, delivery rows, and responses — i.e. their
+   * personal data). The grace window lets an accidental /stop be undone by a
+   * re-join, which clears the flag.
+   */
+  private async erasePendingDeletes(): Promise<void> {
+    const cutoff = new Date(Date.now() - ERASURE_GRACE_MS);
+    const { count } = await this.prisma.subscriber.deleteMany({
+      where: {
+        pendingDelete: true,
+        status: SubscriberStatus.unsubscribed,
+        unsubscribedAt: { lt: cutoff },
+      },
+    });
+    if (count > 0) {
+      this.logger.log(`erased ${count} subscriber(s) past the deletion grace`);
     }
   }
 

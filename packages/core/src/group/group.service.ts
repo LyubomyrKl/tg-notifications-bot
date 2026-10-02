@@ -100,12 +100,18 @@ export class GroupService {
     const group = await this.findOwned(sourceId, groupId);
     this.assertMutable(group, 'add members to');
 
-    // All ids must belong to THIS source — never leak/segment across tenants.
+    // All ids must belong to THIS source AND be active — never segment across
+    // tenants, and never add an unsubscribed (consent-exited) person back into a
+    // group where they'd inflate counts and sit flagged for deletion.
     const owned = await this.prisma.subscriber.count({
-      where: { sourceId, id: { in: subscriberIds } },
+      where: {
+        sourceId,
+        id: { in: subscriberIds },
+        status: SubscriberStatus.active,
+      },
     });
     if (owned !== new Set(subscriberIds).size) {
-      throw new NotFoundException('One or more subscribers not found');
+      throw new NotFoundException('One or more subscribers not found or inactive');
     }
 
     await this.prisma.groupMember.createMany({
@@ -141,9 +147,11 @@ export class GroupService {
     const target = await this.findOwned(sourceId, toGroupId);
     this.assertMutable(target, 'move members into');
     const subscriber = await this.prisma.subscriber.findFirst({
-      where: { id: subscriberId, sourceId },
+      where: { id: subscriberId, sourceId, status: SubscriberStatus.active },
     });
-    if (!subscriber) throw new NotFoundException('Subscriber not found');
+    if (!subscriber) {
+      throw new NotFoundException('Subscriber not found or inactive');
+    }
 
     await this.prisma.$transaction([
       // Drop from all named groups in this Source (target included — re-added next).
@@ -187,13 +195,23 @@ export class GroupService {
     }
   }
 
-  /** Member count: dynamic (active subscribers) for All, row count otherwise. */
+  /**
+   * Member count: active subscribers only, so it matches what {@link members}
+   * lists and what a broadcast actually reaches. For All that's every active
+   * subscriber; for a named group, members whose subscriber is still active
+   * (an unsubscribe shouldn't leave a phantom in the count).
+   */
   private memberCount(group: Group): Promise<number> {
     return group.isAll
       ? this.prisma.subscriber.count({
           where: { sourceId: group.sourceId, status: SubscriberStatus.active },
         })
-      : this.prisma.groupMember.count({ where: { groupId: group.id } });
+      : this.prisma.groupMember.count({
+          where: {
+            groupId: group.id,
+            subscriber: { status: SubscriberStatus.active },
+          },
+        });
   }
 
   private toView(group: Group, memberCount: number): GroupView {

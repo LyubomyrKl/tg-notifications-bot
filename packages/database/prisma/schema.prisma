@@ -96,6 +96,7 @@ enum ScheduledStatus {
   scheduled
   completed
   cancelled
+  failed
 }
 
 /// Append-only audit trail of meaningful Source actions (broadcast sent,
@@ -155,6 +156,9 @@ model Subscriber {
 
   @@unique([sourceId, telegramUserId])
   @@index([sourceId])
+  // Bot-side lookups hit this column alone (identity refresh, self-rename,
+  // /stop, reader card) across all workspaces — index it, not just the pair.
+  @@index([telegramUserId])
   @@map("subscribers")
 }
 
@@ -311,6 +315,11 @@ model Broadcast {
   placeholderValues Json
   createdBy         String // audit: which principal initiated the send
 
+  // Snapshot of the targeted group names at send time. BroadcastTarget rows
+  // cascade away when a group is deleted; this preserves the audit/report label
+  // ("which groups did this go to") even after the group is gone.
+  groupNames        String[]        @default([])
+
   // Two-way interaction (optional). `none` for a plain send; `poll` carries 2–4
   // labels in pollOptions; `question` invites a free-text reply.
   interaction InteractionType @default(none)
@@ -358,6 +367,8 @@ model BroadcastRecipient {
 
   @@unique([broadcastId, subscriberId])
   @@index([broadcastId])
+  // Per-subscriber delivery history reads by subscriberId alone.
+  @@index([subscriberId])
   @@map("broadcast_recipients")
 }
 

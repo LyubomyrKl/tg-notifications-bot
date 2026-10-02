@@ -34,6 +34,28 @@ const EnvSchema = z.object({
   TELEGRAM_BOT_USERNAME: z.string().optional().default(''),
   TELEGRAM_MODE: z.enum(['polling', 'webhook']).default('polling'),
   TELEGRAM_WEBHOOK_URL: z.string().optional().default(''),
+}).superRefine((cfg, ctx) => {
+  // In production, a weak or placeholder secret is a forgeable-token / guessable-
+  // admin-key hazard. Require real entropy and reject the shipped dev defaults.
+  if (cfg.NODE_ENV !== 'production') return;
+  const PLACEHOLDERS = ['dev-superadmin-key-change-me', 'dev-jwt-secret-change-mec'];
+  for (const key of ['SUPERADMIN_API_KEY', 'JWT_SECRET'] as const) {
+    const v = cfg[key];
+    if (v.length < 32) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} must be at least 32 characters in production`,
+      });
+    }
+    if (PLACEHOLDERS.includes(v)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} is still the dev placeholder — set a real secret in production`,
+      });
+    }
+  }
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
