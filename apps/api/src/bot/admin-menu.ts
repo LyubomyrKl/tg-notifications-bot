@@ -206,20 +206,26 @@ export class AdminMenu {
       return void (await this.enterConvo(ctx, 'renameSelf'));
     }
 
-    await ctx.answerCallbackQuery().catch(() => undefined); // ack the spinner
     const principal = await this.requireOwner(ctx);
-    if (!principal) return;
+    if (!principal) {
+      await ctx.answerCallbackQuery().catch(() => undefined); // just clear the spinner
+      return;
+    }
 
+    // Telegram allows exactly ONE answer per callback query, so the spinner is
+    // acked AFTER the action: success clears it quietly, failure turns it into
+    // a visible alert. (Acking first would make every error alert a no-op.)
     try {
-      if (ns === 'noop') return; // pagination label tap — already acked
-      if (ns === 'menu') return void (await this.openHome(ctx, true));
-      if (ns === 'notif') return void (await this.notif(ctx, principal, action, arg));
-      if (ns === 'grp') return void (await this.grp(ctx, principal, action, arg));
-      if (ns === 'inv') return void (await this.inv(ctx, principal, action, arg));
-      if (ns === 'bc') return void (await this.bc(ctx, principal, action, arg));
-      if (ns === 'sch') return void (await this.sch(ctx, principal, action, arg));
-      if (ns === 'sub') return void (await this.sub(ctx, principal, action, arg));
-      if (ns === 'res') return void (await this.res(ctx, principal, action, arg));
+      if (ns === 'menu') await this.openHome(ctx, true);
+      else if (ns === 'notif') await this.notif(ctx, principal, action, arg);
+      else if (ns === 'grp') await this.grp(ctx, principal, action, arg);
+      else if (ns === 'inv') await this.inv(ctx, principal, action, arg);
+      else if (ns === 'bc') await this.bc(ctx, principal, action, arg);
+      else if (ns === 'sch') await this.sch(ctx, principal, action, arg);
+      else if (ns === 'sub') await this.sub(ctx, principal, action, arg);
+      else if (ns === 'res') await this.res(ctx, principal, action, arg);
+      // 'noop' (pagination label) and unknown namespaces fall through to the ack.
+      await ctx.answerCallbackQuery().catch(() => undefined);
     } catch (err) {
       this.logger.error(`menu action "${data}" failed: ${(err as Error).message}`);
       await ctx
@@ -592,6 +598,13 @@ export class AdminMenu {
 
   // ── Broadcast composer ─────────────────────────────────────────────────────
 
+  /** bc:* actions that operate on an in-flight draft (vs. starting/seeding one).
+   *  In every designed path the draft has a notificationId by the time these
+   *  buttons appear — so its absence means the draft is gone. */
+  private static readonly BC_DRAFT_ACTIONS = new Set([
+    'gtog', 'stog', 'people', 'groups', 'go', 'react', 'now', 'sched', 'send',
+  ]);
+
   private async bc(
     ctx: Context,
     p: AuthPrincipal,
@@ -599,6 +612,16 @@ export class AdminMenu {
     arg: string,
   ): Promise<void> {
     const session = getSession(ctx.from!.id);
+    // Stale-button guard: after a restart (in-memory sessions wiped) or once a
+    // send completed (session cleared), old buttons must degrade to a restart
+    // card — not crash on an undefined draft (bc:now / bc:send) and not loop
+    // the picker silently (bc:go with no message chosen).
+    if (
+      AdminMenu.BC_DRAFT_ACTIONS.has(action) &&
+      !session.broadcast?.notificationId
+    ) {
+      return this.renderExpiredFlow(ctx);
+    }
     if (action === 'start') {
       session.broadcast = { groupIds: [] };
       const items = await this.notifications.list(p.sourceId);
@@ -1268,10 +1291,29 @@ export class AdminMenu {
     );
   }
 
+  /** The draft this button belonged to no longer exists — the process was
+   *  restarted, or the send already went out and cleared it. A clean restart
+   *  beats a crash or a silent dead tap. */
+  private async renderExpiredFlow(ctx: Context): Promise<void> {
+    const kb = new InlineKeyboard()
+      .text('📣 New broadcast', 'bc:start')
+      .row()
+      .text('🏠 Menu', 'menu:home');
+    await this.render(
+      ctx,
+      '⌛ <b>This send flow has expired</b> (or was already completed).\nStart a new one below.',
+      kb,
+      true,
+    );
+  }
+
   /** Send a broadcast with no placeholders (the placeholder path uses bcFill). */
   private async doSend(ctx: Context, p: AuthPrincipal): Promise<void> {
     const session = getSession(ctx.from!.id);
-    const b = session.broadcast!;
+    const b = session.broadcast;
+    // Double-tap safety: the first ✅ Send clears the session; a queued second
+    // tap (or any stale button) must not crash on the missing draft.
+    if (!b?.notificationId) return this.renderExpiredFlow(ctx);
     const direct = await this.directLabel(
       p.sourceId,
       b.groupIds ?? [],

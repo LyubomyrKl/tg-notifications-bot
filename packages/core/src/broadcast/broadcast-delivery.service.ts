@@ -139,24 +139,32 @@ export class BroadcastDeliveryService {
       }),
     ]);
 
+    await this.completeIfDone(broadcastId);
+  }
+
+  /**
+   * Complete the broadcast once no recipient is still queued, and send the
+   * owner their delivery report. Guarded transition: when two recipients
+   * finalize concurrently (or the recovery sweep re-runs this after a crash
+   * between the last finalize and completion), exactly one caller wins — so
+   * the owner gets ONE report.
+   */
+  async completeIfDone(broadcastId: string): Promise<void> {
     const remaining = await this.prisma.broadcastRecipient.count({
       where: { broadcastId, status: RecipientStatus.queued },
     });
-    if (remaining === 0) {
-      // Guarded transition: when two recipients finalize concurrently, exactly
-      // one worker wins the update — so the owner gets ONE delivery report.
-      const done = await this.prisma.broadcast.updateMany({
-        where: { id: broadcastId, status: { not: BroadcastStatus.completed } },
-        data: { status: BroadcastStatus.completed, completedAt: new Date() },
-      });
-      if (done.count > 0) {
-        this.logger.log(`Broadcast ${broadcastId} completed`);
-        await this.reportDelivery(broadcastId).catch((err) =>
-          this.logger.warn(
-            `Delivery report for ${broadcastId} failed: ${(err as Error).message}`,
-          ),
-        );
-      }
+    if (remaining > 0) return;
+    const done = await this.prisma.broadcast.updateMany({
+      where: { id: broadcastId, status: { not: BroadcastStatus.completed } },
+      data: { status: BroadcastStatus.completed, completedAt: new Date() },
+    });
+    if (done.count > 0) {
+      this.logger.log(`Broadcast ${broadcastId} completed`);
+      await this.reportDelivery(broadcastId).catch((err) =>
+        this.logger.warn(
+          `Delivery report for ${broadcastId} failed: ${(err as Error).message}`,
+        ),
+      );
     }
   }
 

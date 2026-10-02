@@ -18,6 +18,18 @@ import { ScheduleQueue } from '@paedavic/queue';
 import { resolveSendTargets } from '../broadcast/send-validation';
 
 /**
+ * Cron pattern (UTC) derived from the anchor time + cadence. Module-level so
+ * the recovery sweep can rebuild the exact same trigger when it re-registers
+ * still-`scheduled` rows against a fresh Redis.
+ */
+export function buildCronPattern(repeat: RepeatKind, at: Date): string {
+  const m = at.getUTCMinutes();
+  const h = at.getUTCHours();
+  if (repeat === 'weekly') return `${m} ${h} * * ${at.getUTCDay()}`;
+  return `${m} ${h} * * *`; // daily
+}
+
+/**
  * Schedule broadcasts for later (one-time) or on a cadence (daily/weekly). The
  * audience and placeholder render are deferred to fire time — this only records
  * intent and registers the trigger. All queries are sourceId-scoped.
@@ -61,14 +73,25 @@ export class ScheduleService {
       },
     });
 
-    if (input.repeat === 'none') {
-      await this.queue.scheduleOnce(created.id, sendAt);
-    } else {
-      await this.queue.scheduleRepeat(
-        created.id,
-        this.buildCron(input.repeat, sendAt),
-        sendAt,
-      );
+    // Register the Redis trigger; if that fails, the row must not survive
+    // pretending to be scheduled (it would never fire). Compensating delete is
+    // best-effort — a row that slips through is re-registered by the recovery
+    // sweep at the next boot.
+    try {
+      if (input.repeat === 'none') {
+        await this.queue.scheduleOnce(created.id, sendAt);
+      } else {
+        await this.queue.scheduleRepeat(
+          created.id,
+          buildCronPattern(input.repeat, sendAt),
+          sendAt,
+        );
+      }
+    } catch (err) {
+      await this.prisma.scheduledBroadcast
+        .delete({ where: { id: created.id } })
+        .catch(() => undefined);
+      throw err;
     }
     return this.toView(created);
   }
@@ -98,14 +121,6 @@ export class ScheduleService {
       return this.toView(updated);
     }
     return this.toView(row);
-  }
-
-  /** Cron pattern (UTC) derived from the anchor time + cadence. */
-  private buildCron(repeat: RepeatKind, at: Date): string {
-    const m = at.getUTCMinutes();
-    const h = at.getUTCHours();
-    if (repeat === 'weekly') return `${m} ${h} * * ${at.getUTCDay()}`;
-    return `${m} ${h} * * *`; // daily
   }
 
   private async findOwned(

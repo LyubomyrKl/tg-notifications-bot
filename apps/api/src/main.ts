@@ -6,7 +6,11 @@ import {
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { loadConfig } from '@paedavic/config';
-import { BroadcastConsumer, ScheduleConsumer } from '@paedavic/core';
+import {
+  BroadcastConsumer,
+  RecoveryService,
+  ScheduleConsumer,
+} from '@paedavic/core';
 import { AppModule } from './app.module';
 import { DomainExceptionFilter } from './common/domain-exception.filter';
 
@@ -24,6 +28,9 @@ async function bootstrap(): Promise<void> {
   if (cfg.EMBED_WORKER) {
     app.get(BroadcastConsumer).start();
     app.get(ScheduleConsumer).start();
+    // Heal queue/DB desyncs (lost Redis state, half-created sends) on boot +
+    // on an interval. Runs with the consumers so exactly one topology owns it.
+    app.get(RecoveryService).start();
     new Logger('Bootstrap').log('Embedded delivery + schedule workers started (EMBED_WORKER)');
   }
 

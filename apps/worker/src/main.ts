@@ -2,7 +2,11 @@ import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { loadConfig } from '@paedavic/config';
-import { BroadcastConsumer, ScheduleConsumer } from '@paedavic/core';
+import {
+  BroadcastConsumer,
+  RecoveryService,
+  ScheduleConsumer,
+} from '@paedavic/core';
 import { WorkerModule } from './worker.module';
 
 async function bootstrap(): Promise<void> {
@@ -11,6 +15,7 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
   app.get(BroadcastConsumer).start(); // per-recipient delivery
   app.get(ScheduleConsumer).start(); // fires scheduled/recurring broadcasts
+  app.get(RecoveryService).start(); // heal queue/DB desyncs (boot + interval)
   new Logger('Worker').log('Delivery + schedule workers ready');
 }
 

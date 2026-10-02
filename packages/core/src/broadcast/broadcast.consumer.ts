@@ -7,8 +7,27 @@ import {
   createRedisConnection,
   deliveryBackoff,
 } from '@paedavic/queue';
-import { Worker } from 'bullmq';
+import { UnrecoverableError, Worker } from 'bullmq';
 import { BroadcastDeliveryService } from './broadcast-delivery.service';
+
+/**
+ * True when BullMQ will NOT retry a failed delivery job: either the attempts
+ * are spent, or the failure is unrecoverable. The latter is also how BullMQ
+ * reports a stall-exhausted job (crashed/stuck worker twice) — those arrive
+ * with attemptsMade still low, so an attempts-only check misreads them as
+ * "will retry" and the recipient stays queued, wedging the broadcast in
+ * `sending` with no delivery report, forever.
+ */
+export function isTerminalDeliveryFailure(
+  job: { attemptsMade: number; opts: { attempts?: number } },
+  err: Error,
+): boolean {
+  return (
+    job.attemptsMade >= (job.opts.attempts ?? DELIVERY_ATTEMPTS) ||
+    err instanceof UnrecoverableError ||
+    err.name === 'UnrecoverableError'
+  );
+}
 
 /**
  * BullMQ consumer for the delivery queue. Lives in core so it can run either in
@@ -41,9 +60,10 @@ export class BroadcastConsumer implements OnModuleDestroy {
       },
     );
 
-    // Final failure (retries exhausted) → persist terminal status.
+    // Final failure (retries exhausted OR unrecoverable) → persist terminal
+    // status so the broadcast can complete and the owner gets their report.
     this.worker.on('failed', (job, err) => {
-      if (job && job.attemptsMade >= (job.opts.attempts ?? DELIVERY_ATTEMPTS)) {
+      if (job && isTerminalDeliveryFailure(job, err)) {
         void this.delivery
           .markExhausted(job.data.broadcastId, job.data.recipientId, err.message)
           .catch((e) => this.logger.error(`markExhausted failed: ${e.message}`));

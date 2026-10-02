@@ -41,7 +41,7 @@ function makeFakePrisma() {
         };
         broadcasts.push(b);
         recipientsByBroadcast[b.id] = data.recipients.create.map(
-          (r: any, i: number) => ({ id: `${b.id}_r${i}`, ...r }),
+          (r: any, i: number) => ({ id: `${b.id}_r${i}`, status: 'queued', ...r }),
         );
         return b;
       },
@@ -74,7 +74,9 @@ function makeFakePrisma() {
     },
     broadcastRecipient: {
       findMany: async ({ where }: any) =>
-        recipientsByBroadcast[where.broadcastId] ?? [],
+        (recipientsByBroadcast[where.broadcastId] ?? []).filter(
+          (r: any) => !where.status || r.status === where.status,
+        ),
     },
   };
 }
@@ -115,7 +117,7 @@ describe('BroadcastService.create', () => {
     expect(queue.enqueueRecipients.mock.calls[0][0]).toHaveLength(2);
   });
 
-  it('is idempotent on sendKey — returns existing, no re-enqueue', async () => {
+  it('is idempotent on sendKey — returns existing; heals a stuck queue by re-enqueueing queued recipients (job ids dedupe)', async () => {
     const fake = makeFakePrisma();
     const svc = new BroadcastService(fake as any, queue as any, { record: async () => {} } as any);
     const first = await svc.create('src_A', {
@@ -136,6 +138,22 @@ describe('BroadcastService.create', () => {
     }, 'user_1');
 
     expect(second.id).toBe(first.id);
+    // Still queued → the retry re-enqueues (covers the crash-between-commit-
+    // and-enqueue window). Deterministic job ids make this a no-op when the
+    // jobs already exist — no double send.
+    expect(queue.enqueueRecipients).toHaveBeenCalledTimes(1);
+    expect(queue.enqueueRecipients.mock.calls[0][0]).toHaveLength(2);
+
+    // Once recipients are terminal, a retried create re-enqueues nothing.
+    queue.enqueueRecipients.mockClear();
+    fake.recipientsByBroadcast[first.id].forEach((r: any) => (r.status = 'sent'));
+    await svc.create('src_A', {
+      notificationId: 'n1',
+      groupIds: ['g_all'],
+      subscriberIds: [],
+      placeholderValues: { name: 'Ada' },
+      sendKey: 'dup',
+    }, 'user_1');
     expect(queue.enqueueRecipients).not.toHaveBeenCalled();
   });
 

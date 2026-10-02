@@ -10,6 +10,7 @@ import {
   InteractionType,
   Prisma,
   PrismaService,
+  RecipientStatus,
   SubscriberStatus,
 } from '@paedavic/database';
 import { BroadcastQueue } from '@paedavic/queue';
@@ -50,12 +51,25 @@ export class BroadcastService {
     // Namespacing the sendKey per source makes the global unique = per-tenant.
     const scopedKey = `${sourceId}:${input.sendKey}`;
 
-    // Idempotency: same key → return the existing broadcast, do not re-enqueue.
+    // Idempotency: same key → return the existing broadcast instead of
+    // re-sending. But first heal the half-created case: rows committed, then a
+    // crash/Redis blip before enqueue left it stuck `queued` with no jobs — a
+    // retry must re-enqueue the still-queued recipients. Job ids are
+    // deterministic (recipientId), so when the jobs DO exist this dedupes to a
+    // no-op rather than double-sending.
     const existing = await this.prisma.broadcast.findUnique({
       where: { sendKey: scopedKey },
       include: VIEW_INCLUDE,
     });
-    if (existing) return this.toView(existing);
+    if (existing) {
+      if (
+        existing.status === BroadcastStatus.queued ||
+        existing.status === BroadcastStatus.sending
+      ) {
+        await this.requeueStuckRecipients(existing.id);
+      }
+      return this.toView(existing);
+    }
 
     // Validate template + placeholders + target groups (tenant-scoped).
     const { notification, groups, groupIds } = await resolveSendTargets(
@@ -130,6 +144,26 @@ export class BroadcastService {
     });
 
     return this.toView(broadcast);
+  }
+
+  /**
+   * Re-enqueue delivery jobs for every still-queued recipient of a broadcast.
+   * Safe to repeat: job ids are the recipient ids, so BullMQ dedupes against
+   * jobs that already exist, and delivery itself skips non-queued recipients.
+   * Used by the sendKey-retry heal above and the boot/interval recovery sweep.
+   * Returns how many recipients were (re-)enqueued.
+   */
+  async requeueStuckRecipients(broadcastId: string): Promise<number> {
+    const queued = await this.prisma.broadcastRecipient.findMany({
+      where: { broadcastId, status: RecipientStatus.queued },
+      select: { id: true },
+    });
+    if (queued.length > 0) {
+      await this.queue.enqueueRecipients(
+        queued.map((r) => ({ broadcastId, recipientId: r.id })),
+      );
+    }
+    return queued.length;
   }
 
   async list(sourceId: string): Promise<BroadcastView[]> {

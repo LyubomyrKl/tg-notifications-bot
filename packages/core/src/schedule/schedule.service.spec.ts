@@ -43,6 +43,10 @@ function makeFakePrisma() {
         Object.assign(s, data);
         return s;
       },
+      delete: async ({ where }: any) => {
+        const i = scheduled.findIndex((s) => s.id === where.id);
+        if (i >= 0) scheduled.splice(i, 1);
+      },
     },
   };
 }
@@ -95,6 +99,15 @@ describe('ScheduleService', () => {
     await expect(
       svc.schedule('src_A', base({ placeholderValues: {} }), 'u'),
     ).rejects.toBeInstanceOf(UnfilledPlaceholdersError);
+  });
+
+  it('rolls the row back when trigger registration fails — no phantom schedules', async () => {
+    const fake = makeFakePrisma();
+    const svc = new ScheduleService(fake as any, queue as any);
+    queue.scheduleOnce.mockRejectedValueOnce(new Error('redis down'));
+
+    await expect(svc.schedule('src_A', base(), 'u')).rejects.toThrow('redis down');
+    expect(fake.scheduled).toHaveLength(0); // row deleted, not left "scheduled" forever
   });
 
   it('is tenant-scoped and cancellable', async () => {

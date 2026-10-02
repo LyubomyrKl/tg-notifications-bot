@@ -23,6 +23,14 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # AOF + a named volume: BullMQ state (delayed one-time sends, recurring
+    # job schedulers, pending delivery jobs) must survive container recreates —
+    # without this, every scheduled broadcast silently vanished on an image
+    # bump. Boot-time recovery re-registers from the DB as a second line of
+    # defense, but durable Redis is the first.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -52,3 +60,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
